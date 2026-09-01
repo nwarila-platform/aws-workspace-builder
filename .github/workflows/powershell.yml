@@ -34,7 +34,36 @@ permissions:
   contents: 'read'
 
 jobs:
+  # The reusable fails closed when it finds no <Name>.ps1 + <Name>.pester.ps1 pair, so that a
+  # mistyped scan-path cannot pass as an empty matrix. That is right for a repo that HAS
+  # PowerShell. This repo may not yet, and the workflow's own path filter still fires the job
+  # whenever this file changes -- which would report a failure that means nothing. Gate on the
+  # scan path actually containing a script, mirroring how quality.yml gates its Ansible steps.
+  detect:
+    runs-on: 'ubuntu-24.04'
+    permissions:
+      contents: 'read'
+    outputs:
+      has_powershell: '${{ steps.detect.outputs.has_powershell }}'
+    steps:
+      - name: 'Check out repository'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: 'Detect PowerShell scripts under the scan path'
+        id: 'detect'
+        run: |
+          set -euo pipefail
+          if compgen -G 'scripts/*.ps1' > /dev/null; then
+            echo 'has_powershell=true' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'has_powershell=false' >> "${GITHUB_OUTPUT}"
+          fi
+
   pester-matrix:
+    needs: 'detect'
+    if: "needs.detect.outputs.has_powershell == 'true'"
     permissions:
       contents: 'read'
       checks: 'write'          # report job: check run with per-test results
