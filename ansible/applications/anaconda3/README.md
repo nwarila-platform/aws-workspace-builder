@@ -1,6 +1,6 @@
-# `anaconda3` role
+# `python_3_12` role
 
-**Stub.** Reserves the WorkSpace image catalog product `Anaconda-Inc_Anaconda3` at fleet pin `2025.12-2`.
+**Stub.** Reserves the WorkSpace image catalog product `Python-Software-Foundation_Python-3.12` at fleet pin `3.12.10150.0`.
 
 > **Scope:** none yet. The role is not wired into the playbook, and its present leg refuses
 > loudly if invoked, so wiring it in early fails by name at zero cost.

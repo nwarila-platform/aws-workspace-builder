@@ -2,18 +2,77 @@
 # File: '{{ role_path }}/defaults/main.yml'
 # --- [ Description ] ----------------------------------------------------------------------- #
 #
-# Lowest-precedence configuration for the anaconda3 STUB. The v3 loader merges the OS
-# overlay in vars/ over this map and publishes the result as 'anaconda3_running'.
+# Lowest-precedence configuration for the anaconda3 role. The v3 loader merges the OS overlay in
+# vars/ over this map and publishes the result as 'anaconda3_running'; tasks read only the merged
+# map, never these keys directly.
 #
-# STUB: the map carries only the catalog target this role reserves. The key is the
-# fleet's <Publisher>_<Product> catalog identity and the version is the ratified fleet
-# pin; both are re-measured when the artifact lands in the application repository and
-# the role is finished from the google_chrome pattern.
+# This role follows THE CATALOG PATTERN google_chrome sets as the exemplar: an ARP identity, a
+# staging location, a bounded install, and an artifact layout keyed by <version>. See that
+# role's defaults for the full rationale; only the product values differ here.
+#
+# The deployment-specific inputs -- bucket, pinned version, digest -- are supplied by the
+# PLAYBOOK, where they are visible and changeable. See meta/main.yml and tasks/validate.yml.
 #
 # =========================================================================================== #
 ---
 anaconda3_defaults:
 
-  catalog:
-    key: 'Anaconda-Inc_Anaconda3'
-    version: '2025.12-2'
+  #region ------ [ Install ] ------------------------------------------------------------------ #
+
+  install:
+    # Staging directory on the guest. The installer is removed from here after execution. A site
+    # whose application control trusts only named paths overrides this to one of them.
+    staging_dir: 'C:\Windows\Temp\anaconda3-install'
+
+    # A wrong silent switch can leave the installer waiting on a dialog instead of returning.
+    # Bounding it here fails the run inside Ansible rather than hanging the play.
+    timeout_seconds: 900
+
+    # NSIS switches. /D is the install directory and MUST be last and unquoted, which is why the
+    # command is assembled here as one string rather than as a list the module might reorder.
+    arguments: '/InstallationType=AllUsers /RegisterPython=0 /AddToPath=0 /S /D=C:\ProgramData\Anaconda3'
+
+  #endregion --- [ Install ] ------------------------------------------------------------------ #
+
+  #region ------ [ The version the vendor registers, and the one it should ] ------------------ #
+
+  # ANACONDA REGISTERS A VERSION NOTHING CAN ORDER. Its Add/Remove Programs DisplayVersion is
+  # '2025.12-2' -- a release plus a build counter, joined by a hyphen -- and that is not a version
+  # any comparison can sort: it does not parse, so every read would call the product missing and
+  # reinstall a 1.2 GB payload forever.
+  #
+  # The fix belongs on the MACHINE rather than in the reader. The install post-processes the
+  # registration into the same value expressed as a real version, so Add/Remove Programs tells the
+  # truth in the form every tool already understands -- this role's reader, and equally whatever
+  # inventories the fleet. Teaching one reader a special case would have left the machine wrong
+  # for everything else that looks at it.
+  version_rewrite:
+    from: '2025.12-2'
+    to: '2025.12.2.0'
+
+  #endregion --- [ The version the vendor registers, and the one it should ] ------------------ #
+
+  #region ------ [ Product identity ] --------------------------------------------------------- #
+
+  # The Python installer is a BUNDLE: it registers one Add/Remove Programs entry per
+  # component (Core Interpreter, Standard Library, Executables, ...), not one for the
+  # product. The Core Interpreter entry is the one that means the interpreter is present,
+  # and it carries the same version the bundle does.
+  #
+  # Install state is read from Add/Remove Programs, not from the vendor's own key. The ARP entry
+  # carries the version AND the install location, is a documented Windows contract rather than a
+  # vendor implementation detail, and is removed on uninstall by definition.
+  arp:
+    display_name: 'Anaconda3 2025.12-2 (Python 3.13.9 64-bit)'
+
+  #endregion --- [ Product identity ] --------------------------------------------------------- #
+
+  #region ------ [ Installer layout ] --------------------------------------------------------- #
+
+  # The application-repository object key, keyed by the pinned version the playbook supplies.
+  # The vendor folder is named exactly as the product's ARP Publisher spells it, per the org
+  # apprepo convention.
+  installer:
+    path: 'Anaconda Inc/Anaconda3/<version>/Anaconda3-2025.12-2-Windows-x86_64.exe'
+
+  #endregion --- [ Installer layout ] --------------------------------------------------------- #

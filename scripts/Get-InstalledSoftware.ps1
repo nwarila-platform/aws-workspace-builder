@@ -79,8 +79,13 @@
         PS> ./Get-InstalledSoftware.ps1 -DisplayName 'PDQ Deploy' -Version '20.1.8.0'
 
     .OUTPUTS
-        One object carrying action_required, changed, check_mode, count, entries,
-        installed_version and msg.
+        One object carrying action_required, comparison, downgrade_required,
+        changed, check_mode, count, entries, installed_version and msg.
+
+        The pin is EXACT. action_required is true unless the registered version
+        equals it, and comparison says why -- absent, older, newer or equal --
+        so a caller can upgrade in place when the machine is behind and remove
+        first when it is ahead.
     #>
 [CmdletBinding(SupportsShouldProcess)]
 [OutputType([System.Void])]
@@ -390,9 +395,27 @@ If (-not [System.Version]::TryParse($Version, [Ref]$Desired)) {
   Throw ('Version must be a parseable version string; received {0}.' -f $Version)
 }
 
+# THE PIN IS EXACT, NOT A FLOOR. An image is a statement about what is on it, so "some version
+# at least as new as this" is not a converged state -- two desktops built a month apart from the
+# same playbook would carry different software and both call themselves converged. A version
+# AHEAD of the pin is therefore just as much a difference as one behind it, and the caller is
+# told which, because the two are fixed differently: behind the pin an installer upgrades in
+# place, ahead of it the product must be removed before the pinned version will go on.
+$Comparison = If ($Entries.Count -eq 0) {
+  'absent'
+} ElseIf ($Installed -lt $Desired) {
+  'older'
+} ElseIf ($Installed -gt $Desired) {
+  'newer'
+} Else {
+  'equal'
+}
+
 # A read never changes the machine, so the verdict is NoChange on every path.
 $Result = [PSCustomObject]@{
-  action_required      = ($Entries.Count -eq 0) -or ($Installed -lt $Desired)
+  action_required      = ($Comparison -ne 'equal')
+  comparison           = $Comparison
+  downgrade_required   = ($Comparison -eq 'newer')
   ambiguous            = $Ambiguous
   arp_hidden           = $ArpHidden
   changed              = $False

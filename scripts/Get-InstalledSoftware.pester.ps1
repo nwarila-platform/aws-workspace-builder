@@ -412,17 +412,38 @@ Describe 'Get-InstalledSoftware' {
       $Result.installed_version | Should -Be '19.3.254.0'
     }
 
-    It 'reports no action when the installed version equals the pin' {
+    It 'reports no action ONLY when the installed version equals the pin' {
       $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '20.1.8.0' }
       $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
       $Result.action_required | Should -BeFalse
+      $Result.comparison | Should -Be 'equal'
+      $Result.downgrade_required | Should -BeFalse
     }
 
-    It 'reports no action when the installed version is newer than the pin' {
-      # A downgrade is not this role's job; ahead of the pin is still converged.
+    It 'reports action when the installed version is NEWER than the pin, and says a removal is needed' {
+      # The pin is exact: an image that accepted anything newer would not be reproducible, and two
+      # desktops built weeks apart would carry different software and both claim to be converged.
+      # Ahead of the pin is fixed differently from behind it, so the caller is told which.
       $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '21.0.0.0' }
       $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
-      $Result.action_required | Should -BeFalse
+      $Result.action_required | Should -BeTrue
+      $Result.comparison | Should -Be 'newer'
+      $Result.downgrade_required | Should -BeTrue
+    }
+
+    It 'reports an in-place upgrade when the installed version is older than the pin' {
+      $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '19.3.254.0' }
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
+      $Result.action_required | Should -BeTrue
+      $Result.comparison | Should -Be 'older'
+      # Behind the pin an installer upgrades over the top; nothing has to come off first.
+      $Result.downgrade_required | Should -BeFalse
+    }
+
+    It 'reports the product absent as its own comparison' {
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
+      $Result.comparison | Should -Be 'absent'
+      $Result.downgrade_required | Should -BeFalse
     }
 
     It 'pads a short registered version before comparing, so "22.23.2" meets a pin of 22.23.2.0' {
