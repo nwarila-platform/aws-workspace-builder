@@ -48,6 +48,11 @@ remote_management_policy_defaults:
   # playbook supplies the single inventory value the domain join uses too.
   target_ou: ''
 
+  # The OU a machine is moved into immediately before capture: inheritance blocked, no policy
+  # linked. Created here, beside the OU whose policy it exists to escape, because the two are
+  # one design and a capture OU that does not exist is discovered at the worst possible moment.
+  capture_ou: ''
+
   # The IPv4 address the operator's converge arrives from: the only remote address the firewall
   # rule admits to TCP 5985. Empty on purpose, for the same reason: the playbook resolves it per
   # run, and a policy written for a stale address opens the host to nobody who can use it.

@@ -48,6 +48,57 @@
         protect_from_deletion: true
         state: 'present'
 
+
+    # THE OU A MACHINE GOES TO IN ORDER TO STOP BEING MANAGED. Created here, in the same breath as
+    # the OU whose policy it exists to escape, because the two are one design: a capture OU that
+    # does not exist is discovered at the moment of capture, which is the worst moment to find out.
+    #
+    # Inheritance is blocked on it and nothing is linked to it, so a computer object moved here
+    # receives no Group Policy at all. That is the state AWS asks for before an image is created,
+    # and it is reached by MOVING one machine rather than by unlinking a policy other machines
+    # still need.
+
+    - name: 'BEGIN | Ensure The OU A WorkSpace Is Captured From'
+      register: '__remote_management_policy_capture_ou__'
+
+      microsoft.ad.ou:
+        description: >-
+          Holds a WorkSpace only while its image is being captured: inheritance blocked and no
+          policy linked, so nothing this build delivered is in effect. Managed by
+          aws-workspace-builder.
+        name: "{{ (remote_management_policy_running.capture_ou.split(',', 1) | first) | regex_replace('^OU=', '') }}"
+        path: "{{ remote_management_policy_running.capture_ou.split(',', 1) | last }}"
+        protect_from_deletion: true
+        state: 'present'
+
+    # Blocked separately because creating an OU and deciding what reaches it are different
+    # statements, and only the second one is load-bearing here. Enforced links from higher up
+    # would still apply -- blocking inheritance cannot override an enforced link -- so the proof
+    # that matters is the one the capture play makes on the machine itself, not this task.
+
+    - name: 'BEGIN | Block Policy Inheritance On The Capture OU'
+      register: '__remote_management_policy_capture_block__'
+      changed_when: >-
+        __remote_management_policy_capture_block__.result.blocked_now | default(false) | bool
+
+      ansible.windows.win_powershell:
+        depth: 2
+        error_action: 'stop'
+        parameters:
+          TargetOu: "{{ remote_management_policy_running.capture_ou }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$TargetOu)
+          $Inheritance = Get-GPInheritance -Target:$TargetOu
+          $Blocked = [System.Boolean]$Inheritance.GpoInheritanceBlocked
+          $BlockedNow = $False
+          If (-not $Blocked) {
+            $Null = Set-GPInheritance -Target:$TargetOu -IsBlocked:'Yes'
+            $BlockedNow = $True
+          }
+          $Ansible.Changed = $BlockedNow
+          $Ansible.Result = @{ blocked_now = $BlockedNow; blocked = $True }
+
     #endregion --- [ Begin: Ensure The Organizational Unit ] ---------------------------------- #
 
     #region ------ [ Begin: Converge The Policy ] --------------------------------------------- #

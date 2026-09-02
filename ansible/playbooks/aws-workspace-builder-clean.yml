@@ -86,3 +86,119 @@
   #endregion --- [ Roles ] -------------------------------------------------------------------- #
 
 #endregion --- [ Play: Prepare The Stand-In For Capture ] ------------------------------------- #
+
+#region ------ [ Play: Move The Machine Out Of Reach Of The Build Policy ] -------------------- #
+# THE LAST THING DONE BEFORE CAPTURE, AND IT HAPPENS IN THE DIRECTORY. Everything above gives up
+# state that lives on the machine. This gives up the state that does not: the Group Policy the
+# build linked to the OU the stand-in was born into -- the WinRM listener, the remote-token
+# relaxation, the logon-right edits -- all of which are in effect right up until the object moves.
+#
+# AWS asks that a source machine carry no GPOs before an image is created, because policy can
+# interfere with the RDP certificate handling and with Sysprep. Moving ONE computer object into an
+# OU that blocks inheritance and has nothing linked to it reaches that state without unlinking a
+# policy that other machines still need -- which is the difference between preparing a capture and
+# breaking a directory.
+#
+# The move is on the DC because that is where the object is. The refresh and the proof are on the
+# guest, because whether policy still applies is a fact about the machine, not about the directory.
+
+- name: 'PLAY | Move The Stand-In Into The Capture OU'
+  hosts: 'domain_controllers'
+  any_errors_fatal: true
+  run_once: true
+
+  #region ------ [ Tasks ] -------------------------------------------------------------------- #
+  tasks:
+
+    # Identity comes from the guest, which knows what the directory calls it: the inventory
+    # hostname is the Name tag, and an EC2 instance renamed during bootstrap does not answer to it.
+    - name: 'CAPTURE | Move The Computer Object Out Of The Build OU'
+      register: '__capture_move__'
+      changed_when: '__capture_move__.result.moved | default(false) | bool'
+      vars:
+        __identity__: >-
+          {{ hostvars[groups['workspace_servers'] | first]['ansible_facts']['netbios_name'] }}
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          Identity: "{{ __identity__ }}"
+          TargetOu: "{{ workspace_capture_ou }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$Identity, [System.String]$TargetOu)
+          $Computer = Get-ADComputer -Identity:$Identity
+          $Parent = ($Computer.DistinguishedName -split ',', 2)[1]
+          $Moved = $False
+          If ($Parent -ne $TargetOu) {
+            $Null = Move-ADObject -Identity:$Computer.DistinguishedName -TargetPath:$TargetOu
+            $Moved = $True
+          }
+          $Ansible.Changed = $Moved
+          $Ansible.Result = @{ moved = $Moved; from = $Parent; to = $TargetOu }
+
+  #endregion --- [ Tasks ] -------------------------------------------------------------------- #
+
+#endregion --- [ Play: Move The Machine Out Of Reach Of The Build Policy ] -------------------- #
+
+#region ------ [ Play: Prove The Build Policy No Longer Applies ] ----------------------------- #
+# A move the machine has not noticed is not a move. Group Policy is cached until it refreshes, so
+# the guest is told to refresh and then asked what it is actually carrying -- because the thing
+# being captured is the machine's state, not the directory's intent.
+
+- name: 'PLAY | Prove The Guest Carries No Build Policy'
+  hosts: 'workspace_servers'
+  any_errors_fatal: true
+
+  #region ------ [ Tasks ] -------------------------------------------------------------------- #
+  tasks:
+
+    - name: 'CAPTURE | Refresh Policy Now That The Object Has Moved'
+      changed_when: true
+
+      ansible.windows.win_shell: 'gpupdate /force /wait:120'
+
+    # The build's own policy keys are what this looks for, by name. A machine that still has them
+    # after the move and the refresh is one whose policy has not caught up -- and capturing it
+    # would bake a WinRM listener and a relaxed remote-token policy into every desktop built from
+    # the image.
+    - name: 'CAPTURE | Read The Policy The Guest Still Carries'
+      register: '__capture_policy__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        script: |
+          $WinRm = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service'
+          $System = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+          $Residue = [System.Collections.Generic.List[System.String]]::new()
+          If (Test-Path -LiteralPath:$WinRm) {
+            $Item = Get-ItemProperty -LiteralPath:$WinRm -ErrorAction:'SilentlyContinue'
+            If ($Null -ne $Item -and $Null -ne $Item.PSObject.Properties['AllowAutoConfig']) {
+              $Residue.Add('WinRM AllowAutoConfig')
+            }
+          }
+          If (Test-Path -LiteralPath:$System) {
+            $Item = Get-ItemProperty -LiteralPath:$System -ErrorAction:'SilentlyContinue'
+            If ($Null -ne $Item -and $Null -ne $Item.PSObject.Properties['LocalAccountTokenFilterPolicy']) {
+              $Residue.Add('LocalAccountTokenFilterPolicy')
+            }
+          }
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ residue = $Residue.ToArray(); clear = ($Residue.Count -eq 0) }
+
+    - name: 'CAPTURE | Prove No Build Policy Survives Into The Image'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The guest still carries build policy after the move and refresh:
+          {{ __capture_policy__.result.residue | default([]) | join(', ') }}. Capturing now would
+          bake it into every desktop built from this image. Confirm the computer object is in
+          {{ workspace_capture_ou }}, that the OU blocks inheritance, and that no policy above it
+          is ENFORCED -- an enforced link applies through a block.
+        quiet: true
+        that: [ __capture_policy__.result.clear | default(false) | bool ]
+
+  #endregion --- [ Tasks ] -------------------------------------------------------------------- #
+
+#endregion --- [ Play: Prove The Build Policy No Longer Applies ] ----------------------------- #

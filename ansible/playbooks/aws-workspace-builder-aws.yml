@@ -93,6 +93,9 @@
           - groups['domain_controllers'] | default([]) | length >= 1
           - workspace_computer_ou | default('') | length > 0
           - workspace_computer_ou is match('^OU=[^,]+(,(OU|DC)=[^,]+)+$')
+          - workspace_capture_ou | default('') | length > 0
+          - workspace_capture_ou is match('^OU=[^,]+(,(OU|DC)=[^,]+)+$')
+          - workspace_capture_ou != workspace_computer_ou
         fail_msg: >-
           Refusing to configure: the 'domain_controllers' inventory group is empty, or the
           directory facts it carries are not. This playbook prepares the OU the guest is created
@@ -242,6 +245,7 @@
       vars:
         remote_management_policy:
           target_ou: "{{ workspace_computer_ou }}"
+          capture_ou: "{{ workspace_capture_ou }}"
           operator_address: "{{ hostvars['localhost']['__operator_address__'] }}"
     #endregion --- [ Roles: Remote Management Policy ] ---------------------------------------- #
 

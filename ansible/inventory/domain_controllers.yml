@@ -41,6 +41,18 @@ all:
     # and would refuse to create the parent.
     workspace_computer_ou: 'OU=WorkSpaces,OU=Domain Workstations,DC=tcn,DC=trinitytechnicalservices,DC=com'
 
+    # WHERE A MACHINE GOES TO STOP BEING MANAGED. Immediately before capture the computer object
+    # is moved here, into an OU that blocks inheritance and has no policy linked to it. Everything
+    # the build delivered by Group Policy -- the WinRM listener, the remote-token relaxation, the
+    # logon-right edits -- stops applying, so none of it is in effect at the moment the image is
+    # taken. AWS's own guidance is that a source machine should carry no GPOs before image
+    # creation, and this is how that is arranged without unlinking a policy other machines share.
+    #
+    # It is deliberately NOT a child of the build OU: a child would inherit, and blocking
+    # inheritance on a child of the very OU whose policy we are escaping is a subtlety nobody
+    # should have to hold in their head.
+    workspace_capture_ou: 'OU=WorkSpaces Capture,OU=Domain Workstations,DC=tcn,DC=trinitytechnicalservices,DC=com'
+
 domain_controllers:
   hosts:
     tcnhq-dc01:
