@@ -175,7 +175,7 @@
 
 - name: 'END | Prove Nothing This Role Created Remains'
   register: '__remote_management_policy_final__'
-  failed_when: not (__remote_management_policy_final__.result.clear | default(false) | bool)
+  failed_when: not (__remote_management_policy_final__.result.is_clear | default(false) | bool)
 
   ansible.windows.win_powershell:
     depth: 3
@@ -200,6 +200,6 @@
         }
       }
       $Ansible.Changed = $False
-      $Ansible.Result = @{ clear = ($Remaining.Count -eq 0); remaining = $Remaining.ToArray() }
+      $Ansible.Result = @{ is_clear = ($Remaining.Count -eq 0); remaining = $Remaining.ToArray() }
 
 #endregion --- [ End: Prove The Directory Is Back ] ------------------------------------------- #

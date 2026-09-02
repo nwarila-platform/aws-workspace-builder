@@ -58,6 +58,22 @@
         quiet: true
         that: [ state is not defined or (state | string | lower | trim) == 'clean' ]
 
+    # THE NAME THE DIRECTORY KNOWS THIS MACHINE BY, read here because this is the play that has
+    # the guest. The move below happens on a domain controller, which cannot ask. Taken from the
+    # machine itself rather than from ansible_facts: this playbook does not gather facts, and the
+    # inventory hostname is the Name tag, which after the bootstrap rename is not what the
+    # directory calls it.
+    - name: 'PRE | Read The Name The Directory Knows This Host By'
+      changed_when: false
+      register: '__capture_identity__'
+
+      ansible.windows.win_powershell:
+        depth: 2
+        error_action: 'stop'
+        script: |
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ netbios = [System.String]$env:COMPUTERNAME }
+
   #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
 
   #region ------ [ Roles ] -------------------------------------------------------------------- #
@@ -117,7 +133,7 @@
       changed_when: '__capture_move__.result.moved | default(false) | bool'
       vars:
         __identity__: >-
-          {{ hostvars[groups['workspace_servers'] | first]['ansible_facts']['netbios_name'] }}
+          {{ hostvars[groups['workspace_servers'] | first]['__capture_identity__'].result.netbios }}
 
       ansible.windows.win_powershell:
         depth: 3
@@ -154,6 +170,64 @@
   #region ------ [ Tasks ] -------------------------------------------------------------------- #
   tasks:
 
+    # A MOVE THE MACHINE HAS NOT NOTICED IS NOT A MOVE, AND gpupdate ALONE CANNOT NOTICE THIS ONE.
+    # Group Policy scopes on where the computer object sits, and the client works from its own
+    # cached placement -- so after the object moves, a refresh in the same boot re-applies the
+    # policy of the OU it thinks it is still in. Proven here rather than assumed: the first run of
+    # this play refreshed and found the build's WinRM and remote-token keys exactly where they
+    # were.
+    #
+    # The reboot is what makes the machine read its own placement again. It is also wanted for its
+    # own sake -- the Image Checker refuses a capture with a reboot pending, and this is the last
+    # thing that would have caused one.
+    - name: 'CAPTURE | Reboot So The Guest Reads Its New Placement'
+
+      ansible.windows.win_reboot:
+        boot_time_command: >-
+          (Get-CimInstance -ClassName Win32_OperatingSystem -Property
+          LastBootUpTime).LastBootUpTime.ToFileTime()
+        msg: 'Restarting so Group Policy re-scopes to the capture OU.'
+        post_reboot_delay: 15
+        pre_reboot_delay: 2
+        reboot_timeout: 900
+
+    # THE GUEST'S ONLY ROUTE TO THE DIRECTORY COMES UP AFTER BOOT, NOT WITH IT. This machine
+    # reaches the domain controller through a tunnel a service establishes once Windows is
+    # already running, so for the first stretch after a restart the host is up, reachable over
+    # SSH, and has no domain at all. A refresh in that window cannot contact a controller, quietly
+    # re-applies nothing, and leaves the policy exactly where it was -- which is precisely what
+    # the first attempt at this play did, and why its proof then failed on residue that a working
+    # refresh would have cleared.
+    #
+    # Waited on the port that answers only when the tunnel is up, so the refresh below runs
+    # against a directory that is actually there.
+    # REACHABLE IS NOT THE SAME AS USABLE, and the difference cost a run to find. Waiting for the
+    # controller's LDAP port to answer proves the tunnel is up; it says nothing about whether this
+    # machine can yet AUTHENTICATE to the directory. A refresh in that gap reports success, does
+    # nothing, and leaves the policy in place -- so the proof below failed on residue while the
+    # move itself had been correct all along.
+    #
+    # What is waited on instead is the locator, which only answers once the machine can find a
+    # controller for its own domain and talk to it as itself.
+    - name: 'CAPTURE | Wait Until The Guest Can Actually Use The Directory'
+      register: '__capture_locator__'
+      retries: 30
+      delay: 10
+      until: __capture_locator__.result.usable | default(false) | bool
+      changed_when: false
+
+      ansible.windows.win_powershell:
+        depth: 2
+        error_action: 'stop'
+        script: |
+          $Located = $False
+          & nltest ('/dsgetdc:' + $env:USERDNSDOMAIN) *>$null
+          If ($LASTEXITCODE -eq 0) {
+            Try { $Located = [System.Boolean](Test-ComputerSecureChannel -ErrorAction:'Stop') } Catch { $Located = $False }
+          }
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ usable = $Located }
+
     - name: 'CAPTURE | Refresh Policy Now That The Object Has Moved'
       changed_when: true
 
@@ -185,8 +259,12 @@
               $Residue.Add('LocalAccountTokenFilterPolicy')
             }
           }
+          # NOT NAMED 'clear'. Jinja resolves result.clear to the DICTIONARY'S OWN .clear method
+          # rather than to this key, so the assertion below read a method object instead of a
+          # boolean and failed against a machine that was entirely correct. The same collision
+          # waits on values, keys, items, get, copy, update and pop.
           $Ansible.Changed = $False
-          $Ansible.Result = @{ residue = $Residue.ToArray(); clear = ($Residue.Count -eq 0) }
+          $Ansible.Result = @{ residue = $Residue.ToArray(); is_clear = ($Residue.Count -eq 0) }
 
     - name: 'CAPTURE | Prove No Build Policy Survives Into The Image'
       ansible.builtin.assert:
@@ -197,7 +275,7 @@
           {{ workspace_capture_ou }}, that the OU blocks inheritance, and that no policy above it
           is ENFORCED -- an enforced link applies through a block.
         quiet: true
-        that: [ __capture_policy__.result.clear | default(false) | bool ]
+        that: [ __capture_policy__.result.is_clear | default(false) | bool ]
 
   #endregion --- [ Tasks ] -------------------------------------------------------------------- #
 
