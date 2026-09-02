@@ -1,0 +1,89 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the workspace_baseline role. The v3 loader merges the OS
+# overlay in vars/ over this map and publishes the result as 'workspace_baseline_running'; tasks
+# read only the merged map, never these keys directly.
+#
+# WHAT THIS ROLE IS FOR. A production WorkSpace has no launch key and no user_data: it is born
+# domain-joined, the only credential that reaches it is the one the directory escrows, and the
+# only listener it answers on is the one Group Policy configured. The EC2 stand-in is born the
+# opposite way — a key pair installed from IMDS and OpenSSH listening — so this role removes the
+# difference. It proves the WinRM listener the domain delivered actually answers, from the
+# controller, and only then takes the launch key's way in away. It builds nothing: a listener
+# this role built would hide a domain that never delivered one, which is the one thing the
+# stand-in exists to find out.
+#
+# WHAT BELONGS HERE: the port, the service and rule names, and the file paths Windows itself
+# defines. All of them are Windows and OpenSSH contracts rather than site choices, which is why
+# every value below carries a real default and the playbook supplies nothing.
+#
+# =========================================================================================== #
+---
+workspace_baseline_defaults:
+
+  #region ------ [ The way in a WorkSpace has ] ----------------------------------------------- #
+
+  # WinRM over HTTP on 5985: the listener "Allow remote server management through WinRM" makes
+  # the service publish, and the one a domain-joined WorkSpace actually has. Not HTTPS on 5986 --
+  # nothing in a WorkSpace issues a certificate, and the traffic is sealed by the client's own
+  # NTLM or Kerberos message encryption, which is what the service's AllowUnencrypted=false
+  # accepts. 5985 is the IANA registration for WS-Management over HTTP, so the port is not a
+  # preference.
+  winrm:
+    service_name: 'WinRM'
+    port: 5985
+
+    # How long the guest is given to publish the policy-delivered listener on itself. The policy
+    # arrives by Group Policy on the domain's refresh cycle and the service publishes the listener
+    # when it processes it, so this is a wait rather than a snap check; on a host that rebooted
+    # into the domain it is normally already there.
+    listener_timeout_seconds: 300
+
+    # Reachability is proved from the CONTROLLER before the SSH door closes, so a listener that
+    # exists but cannot be reached — a security group that never opened 5985 to this operator, or
+    # a firewall rule scoped to a profile this interface never lands in — fails here, with SSH
+    # still working, rather than stranding the host.
+    reachability_timeout_seconds: 120
+
+  #endregion --- [ The way in a WorkSpace has ] ----------------------------------------------- #
+
+  #region ------ [ The way in a WorkSpace does not have ] ------------------------------------- #
+
+  ssh:
+    # Installed by the pinned framework's user_data from IMDS. Removing the file is what actually
+    # revokes the launch key: the capability removal below is the slower, more complete half.
+    authorized_keys_path: 'C:\ProgramData\ssh\administrators_authorized_keys'
+
+    # The rule the same user_data created, by the display name it used.
+    firewall_rule_name: 'OpenSSH SSH Server'
+
+    # The DISM capability identity. Removing it is what makes "pretend OpenSSH is not installed"
+    # true rather than merely firewalled — and it is the state the openssh_server role later
+    # reverses over WinRM, which is the whole point of the exercise.
+    capability_name: 'OpenSSH.Server~~~~0.0.1.0'
+
+  #endregion --- [ The way in a WorkSpace does not have ] ------------------------------------- #
+
+  #region ------ [ The deferred removal ] ----------------------------------------------------- #
+
+  # A host cannot uninstall the service carrying the session that is uninstalling it. The removal
+  # is therefore handed to the Task Scheduler as a one-shot task that fires after this play has
+  # let go of the connection, runs as SYSTEM, and unregisters itself.
+  removal_task:
+    name: 'nwarila-platform-seal-workspace-stand-in'
+
+    # Registration-triggered with a delay, NOT a wall-clock start boundary: a boundary would be
+    # written by the controller in ITS timezone and read by the guest in the guest's, and the two
+    # are not the same machine. The delay is measured by the scheduler itself, from a moment it
+    # observed.
+    #
+    # Long enough that this role's remaining tasks and the play's teardown of the SSH connection
+    # both finish first; short enough that the wait for port 22 to go quiet is not the slowest
+    # thing in the run.
+    delay: 'PT3M'
+
+    path: '\nwarila-platform\'
+
+  #endregion --- [ The deferred removal ] ----------------------------------------------------- #

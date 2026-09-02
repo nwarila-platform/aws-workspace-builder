@@ -1,0 +1,48 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for laps_credential. Description-only (style guide 8): NOT an enforcing argument
+# spec. The role's tasks/validate.yml enforces its merged-config guards.
+#
+# THIS ROLE RUNS ON A DOMAIN CONTROLLER. Windows LAPS escrows the password on the computer object
+# in Active Directory, and Get-LapsADPassword reads it from the directory — so the read happens
+# where the directory is. The machine being waited on is never contacted, and does not have to be
+# reachable. That is the point: at the moment this runs, it is reachable by nothing else.
+#
+# REQUIRED INPUT — declared empty in defaults and supplied by the playbook.
+#
+#   laps_credential.identity  The computer object to read, as its sAMAccountName WITHOUT the
+#                             trailing '$'. Deployment-specific and per-run: an EC2 Windows
+#                             instance is NOT renamed at launch, so the name Active Directory
+#                             knows it by is the AMI-generated one, not the inventory hostname.
+#                             The playbook reads it from the guest before sealing the host and
+#                             passes it here.
+#
+# WHAT THE CALLER GETS BACK: the registered result '__laps_credential_read__', whose
+# .result.password and .result.account are what the next play authenticates with. The registering
+# task is no_log, which suppresses its display but not its registration.
+#
+# WHAT THE CALLER MUST KNOW: nothing here triggers the escrow. The LAPS policy arrives by Group
+# Policy and Windows LAPS processes it on its own cycle. A domain that does not carry the LAPS GPO
+# escrows nothing and burns the whole wait budget — run the guest-side laps_admin role instead
+# (the playbook's 'laps_policy_source: local').
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'laps_credential'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    Waits on a domain controller for Active Directory to escrow the Windows LAPS credential for a
+    named computer, and publishes it to the play through a no_log registered result. Treats a
+    credential that has not been escrowed yet as a state to wait on and an unknown identity as a
+    failure, because only one of those is fixed by waiting.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'laps', 'activedirectory', 'credentials', 'security']
+
+dependencies: []

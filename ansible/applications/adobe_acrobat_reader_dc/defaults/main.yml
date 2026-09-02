@@ -1,0 +1,19 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the adobe_acrobat_reader_dc STUB. The v3 loader merges the OS
+# overlay in vars/ over this map and publishes the result as 'adobe_acrobat_reader_dc_running'.
+#
+# STUB: the map carries only the catalog target this role reserves. The key is the
+# fleet's <Publisher>_<Product> catalog identity and the version is the ratified fleet
+# pin; both are re-measured when the artifact lands in the application repository and
+# the role is finished from the google_chrome pattern.
+#
+# =========================================================================================== #
+---
+adobe_acrobat_reader_dc_defaults:
+
+  catalog:
+    key: 'Adobe-Systems-Inc_Adobe-Acrobat-Reader-DC'
+    version: '26.1.21789.0'

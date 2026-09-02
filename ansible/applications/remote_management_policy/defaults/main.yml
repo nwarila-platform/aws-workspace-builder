@@ -1,0 +1,56 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the remote_management_policy role. The v3 loader merges
+# the OS overlay in vars/ over this map and publishes the result as
+# 'remote_management_policy_running'; tasks read only the merged map, never these keys directly.
+#
+# THIS ROLE RUNS ON A DOMAIN CONTROLLER, not on the host being built. It prepares the directory
+# a WorkSpace is born into: the organizational unit its computer object is created in, and the
+# Group Policy Object linked there that opens the machine to its operator -- the WinRM HTTP
+# listener, the firewall opening for the operator's address, the unfiltered remote token for the
+# LAPS-managed administrator, and the network and Remote Desktop logon rights that account needs.
+#
+# In production those settings are the directory team's standing configuration and this role is
+# the test domain's stand-in for it. The one part that is genuinely per run is the operator
+# address, because the firewall rule admits that address and nothing else.
+#
+# WHAT BELONGS HERE: the policy's name and comment, which are properties of what the policy is.
+#
+# WHAT DOES NOT: the OU and the operator address. The OU is a fact about the deployment's
+# directory, held once in the inventory so the join and the policy cannot disagree about it; the
+# address is resolved per run from the seat the converge is running in.
+#
+# =========================================================================================== #
+---
+remote_management_policy_defaults:
+
+  #region ------ [ Policy ] -------------------------------------------------------------------- #
+
+  # The GPO's display name. Resolved by name on every run and created when absent; a name that
+  # resolves to more than one GPO is refused rather than guessed at.
+  name: 'WorkSpaces Remote Management'
+
+  # Recorded on the GPO when it is created, so a reader of the console learns what owns it.
+  comment: >-
+    Opens a WorkSpace to its operator: the WinRM HTTP listener, the firewall opening for the
+    operator address, the unfiltered remote token, and the network and Remote Desktop logon
+    rights the LAPS-managed administrator needs. Managed by aws-workspace-builder, which
+    re-asserts these settings and rewrites the security template whole on every run.
+
+  #endregion --- [ Policy ] -------------------------------------------------------------------- #
+
+  #region ------ [ Target ] -------------------------------------------------------------------- #
+
+  # Distinguished name of the OU the WorkSpace's computer object is created in, which is where
+  # the GPO is linked. Empty on purpose: tasks/validate.yml refuses an empty one, and the
+  # playbook supplies the single inventory value the domain join uses too.
+  target_ou: ''
+
+  # The IPv4 address the operator's converge arrives from: the only remote address the firewall
+  # rule admits to TCP 5985. Empty on purpose, for the same reason: the playbook resolves it per
+  # run, and a policy written for a stale address opens the host to nobody who can use it.
+  operator_address: ''
+
+  #endregion --- [ Target ] -------------------------------------------------------------------- #

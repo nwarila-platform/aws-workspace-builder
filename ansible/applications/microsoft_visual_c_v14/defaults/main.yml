@@ -1,0 +1,19 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the microsoft_visual_c_v14 STUB. The v3 loader merges the OS
+# overlay in vars/ over this map and publishes the result as 'microsoft_visual_c_v14_running'.
+#
+# STUB: the map carries only the catalog target this role reserves. The key is the
+# fleet's <Publisher>_<Product> catalog identity and the version is the ratified fleet
+# pin; both are re-measured when the artifact lands in the application repository and
+# the role is finished from the google_chrome pattern.
+#
+# =========================================================================================== #
+---
+microsoft_visual_c_v14_defaults:
+
+  catalog:
+    key: 'Microsoft-Corporation_Microsoft-Visual-C-v14'
+    version: '14.51.36247.0'

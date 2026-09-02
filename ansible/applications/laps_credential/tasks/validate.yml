@@ -1,0 +1,38 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/validate.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Validates the merged laps_credential configuration after the v3 loader merge, on the
+# CONTROLLER, before anything touches the domain controller.
+#
+# The cost of getting this wrong is unusual: the read is a WAIT, so a missing or mistyped
+# identity does not fail fast, it fails after the entire budget has elapsed. Both shapes are
+# therefore checked here, where the answer arrives in a second.
+#
+# meta/main.yml describes these inputs; this file is what enforces them.
+#
+# =========================================================================================== #
+---
+- name: 'VALIDATE | Require The Computer This Read Is Waiting On'
+  ansible.builtin.assert:
+    that:
+      - laps_credential_running.identity | default('') | length > 0
+      - laps_credential_running.identity is match('^[A-Za-z0-9][A-Za-z0-9-]{0,14}$')
+    fail_msg: >-
+      Refusing to wait: laps_credential.identity must name the computer object to read, as its
+      sAMAccountName WITHOUT the trailing '$' (a NetBIOS name: 1-15 characters, letters, digits
+      and hyphens, not starting with a hyphen). The playbook supplies it from the name the guest
+      was actually joined under, read from the guest itself -- an EC2 Windows instance is not
+      renamed at launch, so it is NOT the inventory hostname. See meta/main.yml.
+    quiet: true
+
+- name: 'VALIDATE | Require A Bounded Wait'
+  ansible.builtin.assert:
+    that:
+      - laps_credential_running.wait.attempts | int > 0
+      - laps_credential_running.wait.delay_seconds | int > 0
+    fail_msg: >-
+      Refusing to wait: wait.attempts and wait.delay_seconds must both be positive. Nothing in
+      this play triggers the escrow -- Windows LAPS processes its policy on its own cycle -- so
+      an unbounded wait is a hung run, not a patient one.
+    quiet: true

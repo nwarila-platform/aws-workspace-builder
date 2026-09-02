@@ -1,0 +1,21 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/present_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# STUB for catalog product 'Amazon-Web-Services_aws-cfn-bootstrap' (fleet pin 2.0.34).
+#
+# The one honest action of an unfinished role is to refuse loudly: this role is not yet
+# wired into the playbook, and wiring it in early fails here, by name, rather than half
+# installing something. Finish it from the google_chrome pattern (BEGIN reads Add/Remove
+# Programs, PROCESS fetches from the application repository and installs the verified
+# copy, END proves the registration), stage the artifact and its digest, then replace
+# this file.
+#
+# =========================================================================================== #
+---
+- name: 'BEGIN | Refuse The Unfinished Stub'
+  ansible.builtin.fail:
+    msg: >-
+      The 'aws_cfn_bootstrap' role is a stub reserving catalog product 'Amazon-Web-Services_aws-cfn-bootstrap' at fleet pin 2.0.34.
+      Finish it from the google_chrome pattern and stage its artifact in the application
+      repository before wiring it into the play. See README.md.

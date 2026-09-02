@@ -1,0 +1,33 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the laps_admin role. The v3 loader merges the OS overlay
+# in vars/ over this map and publishes the result as 'laps_admin_running'; tasks read only the
+# merged map, never these keys directly.
+#
+# WHAT BELONGS HERE: the password policy Windows LAPS enforces for the built-in Administrator.
+# These are universally safe — any site can run them — and a site that hardens further
+# overrides them in its playbook.
+#
+# WHAT IS DELIBERATELY NOT OFFERED: the managed account name (unset targets the built-in
+# RID-500 Administrator by well-known SID, which survives a rename; naming it would be a knob
+# whose only wrong settings manage the wrong account) and the escrow directory (Active
+# Directory is an invariant of this deployment — the DC is where a WorkSpace's credential
+# lives — so the value is written literally rather than offered).
+#
+# =========================================================================================== #
+---
+laps_admin_defaults:
+
+  policy:
+    # Length and complexity of each generated password. Complexity 4 is the vendor's fullest
+    # character set (upper, lower, digits, specials); 24 clears every fleet baseline with
+    # margin while staying typeable for a break-glass logon.
+    password_length: 24
+    password_complexity: 4
+
+    # How long a generated password lives before LAPS rotates it on its own. The stand-in is
+    # ephemeral, so the value matters for the production image more than for CI: thirty days
+    # matches the fleet's rotation cadence.
+    password_age_days: 30

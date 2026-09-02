@@ -1,0 +1,58 @@
+# =========================================================================================== #
+# File: 'ansible/inventory/domain_controllers.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# The domain controller this build reads LAPS credentials from, named rather than discovered. The
+# fleet inventory next to this file is dynamic because the instance it describes is ephemeral --
+# created and destroyed by every run, so an address written down would be wrong by the time it
+# was read. A domain controller is the opposite: it is standing infrastructure that outlives
+# every run, so it is written down.
+#
+# WHY A BUILD PLAYBOOK TALKS TO A DOMAIN CONTROLLER AT ALL. Halfway through the run the guest is
+# sealed to match a real WorkSpace: no launch key, no OpenSSH, nothing the build holds a
+# credential for. The only credential that reaches it is the one Windows LAPS escrows on its
+# computer object -- and that lives in Active Directory, so it is read from a domain controller
+# with Get-LapsADPassword. The guest is not contacted by this host and does not have to be
+# reachable, which is the entire reason the read happens here.
+#
+# THIS ADDRESS IS ON THE PRIVATE NETWORK, which is why the playbook is run from an operator
+# workstation on the LAN rather than from the CI runner. The workflow launches and holds the
+# instance; the converge is local. See the repository README.
+#
+# No key file is named. The connection uses whatever the operator's ssh-agent or ~/.ssh/config
+# supplies for this host, so a domain controller credential is never written into this
+# repository, staged by a workflow, or held anywhere a run could publish it.
+#
+# THE DIRECTORY FACTS LIVE HERE TOO, under 'all', because they are true of every host in the run
+# and of no single play: the OU a WorkSpace's computer object is created in is where the domain
+# join puts the guest AND where the remote management policy is linked, and it is written once so
+# those two cannot disagree. A production WorkSpaces directory carries this as its target-OU
+# setting; the test domain carries it as the value below.
+#
+# =========================================================================================== #
+---
+all:
+  vars:
+    # The organizational unit the stand-in is created in, as a distinguished name. A WorkSpace is
+    # a desktop, so it lives under the workstations OU, in a child of its own -- the same shape
+    # every server product in this directory has under 'OU=Domain Servers'. The parent carries the
+    # join delegation for the join account and the LAPS self-write rights a computer object needs,
+    # and a child inherits both; the playbook's directory play creates the child when it is absent
+    # and would refuse to create the parent.
+    workspace_computer_ou: 'OU=WorkSpaces,OU=Domain Workstations,DC=tcn,DC=trinitytechnicalservices,DC=com'
+
+domain_controllers:
+  hosts:
+    tcnhq-dc01:
+      ansible_host: '10.69.112.4'
+  vars:
+    ansible_connection: 'ssh'
+    ansible_port: 22
+    ansible_user: 'Administrator'
+    # The controller's OpenSSH DefaultShell registry value is absent, so it serves cmd -- the
+    # OpenSSH default. This repository's guests serve PowerShell only because os_bootstrap flips
+    # them; a domain controller is not ours to bootstrap, so it is addressed as it is.
+    ansible_shell_type: 'cmd'
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20'
+    platform: 'Windows'
+    ENV: 'test'

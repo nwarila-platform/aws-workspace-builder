@@ -1,0 +1,104 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the openssh_server role. The v3 loader merges the OS overlay
+# in vars/ over this map and publishes the result as 'openssh_server_running'; tasks read only the
+# merged map, never these keys directly.
+#
+# WHAT THIS ROLE IS FOR. It runs over WinRM, authenticated with the LAPS credential, on a host
+# that has no OpenSSH and no authorized key — the state workspace_baseline put it in. It installs
+# the capability, installs the operator's public key from the account's ansible bucket, and hands
+# the rest of the build back to SSH. In production this is the moment an administrator would open
+# a WorkSpace's management path with the only credential they have.
+#
+# WHAT BELONGS HERE: the capability identity, the service name, the port and the paths — Windows
+# and OpenSSH contracts rather than site choices — and the key object's name and digest, which
+# move together and are pinned here so a run cannot pick up a key nobody reviewed.
+#
+# WHAT DOES NOT: capability.payload_path and authorized_key.bucket. Where the operator keeps the
+# Features on Demand cab, and which account's bucket holds the key, are genuinely site-specific,
+# so both are empty by default and required. See below.
+#
+# =========================================================================================== #
+---
+openssh_server_defaults:
+
+  #region ------ [ The capability ] ----------------------------------------------------------- #
+
+  capability:
+    # The DISM identity of the in-box OpenSSH server. The same string workspace_baseline removes,
+    # which is what makes the pair reversible.
+    name: 'OpenSSH.Server~~~~0.0.1.0'
+
+    # WHERE THE PAYLOAD COMES FROM: a Features on Demand cab on the CONTROLLER, carried to the
+    # guest over the session running this role and installed with Windows Update forbidden as a
+    # fallback. Never Windows Update: the image carries the capability's metadata but not its
+    # payload, and a domain-joined host behind WSUS policy is refused the payload from Windows
+    # Update (0x800f0954) -- which is exactly the host a WorkSpace is. Carrying the cab is what an
+    # administrator with a WorkSpace and a password would do, and an install that succeeds proves
+    # the cab rather than the network.
+    #
+    # Empty on purpose: tasks/validate.yml refuses an empty one, so a run that forgot the cab fails
+    # on the controller in a second rather than after the LAPS wait, over the one transport the
+    # host has left. The playbook supplies it from the openssh_payload extra-var. For Windows
+    # Server 2022 (build 20348) the cab is OpenSSH-Server-Package~31bf3856ad364e35~amd64~~.cab from
+    # the matching Features on Demand ISO -- the same object the framework's windows_fod_source
+    # bucket holds for user_data.
+    payload_path: ''
+
+    # Where the cab is staged on the guest for the length of the install, and removed afterwards.
+    # The same directory the framework's user_data stages into, so a host shows one shape whether
+    # the capability arrived at boot or here.
+    staging_dir: 'C:\Windows\Temp\fod'
+
+  #endregion --- [ The capability ] ----------------------------------------------------------- #
+
+  #region ------ [ The service and its port ] ------------------------------------------------- #
+
+  service:
+    name: 'sshd'
+
+  firewall:
+    # The display name the framework's user_data used, so the rule this role creates is the rule
+    # workspace_baseline removed rather than a second one beside it.
+    rule_name: 'OpenSSH SSH Server'
+    port: 22
+
+  #endregion --- [ The service and its port ] ------------------------------------------------- #
+
+  #region ------ [ The authorized key ] ------------------------------------------------------- #
+
+  authorized_keys:
+    # Windows OpenSSH reads administrative keys from this ONE file for every member of the local
+    # Administrators group, not from the user's own .ssh directory. The path is compiled into the
+    # shipped sshd_config, so it is a contract rather than a choice.
+    path: 'C:\ProgramData\ssh\administrators_authorized_keys'
+
+    # And it is refused unless it is writable by Administrators and SYSTEM ONLY. sshd checks the
+    # ACL and silently ignores a file that fails the check, which presents as a key that is
+    # installed, correct, and rejected.
+    principals: [ 'BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM' ]
+
+  #endregion --- [ The authorized key ] ------------------------------------------------------- #
+
+  #region ------ [ Where the public key comes from ] ------------------------------------------ #
+
+  # The operator's PUBLIC key, held as an object in the account's ansible bucket and read by the
+  # CONTROLLER -- the same pattern every fleet role that needs material from S3 follows
+  # (domain_member's join password, remote_client's connection profile). A real WorkSpace has no
+  # launch key and no metadata answer to read one from, so the key cannot come from the guest's
+  # side of the session; it comes from the one place the build already trusts. The guest receives
+  # the key's bytes over the session running this role, never a credential to fetch them with.
+  #
+  # The object is trusted only once it matches the digest pinned beside it. A public key is not
+  # a secret, but WHICH key opens every host this role restores is exactly the kind of thing a
+  # bucket write must not be able to change unnoticed. Rotating the key means moving the object
+  # and this digest together, in one change.
+  authorized_key:
+    # REQUIRED from the caller: account-scoped, and only the pipeline knows the account.
+    bucket: ''
+    object: 'applications/openssh_server/administrators_authorized_keys'
+    sha256: 'db977ff7a439eec1e5ab558f4069d16b676392e98493c02764eb6c7008ba8fe0'
+
+  #endregion --- [ Where the public key comes from ] ------------------------------------------ #

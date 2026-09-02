@@ -1,0 +1,51 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for remote_management_policy. Description-only (style guide 8): NOT an
+# enforcing argument spec. The role's tasks/validate.yml enforces its merged-config guards.
+#
+# THIS ROLE RUNS ON A DOMAIN CONTROLLER. It prepares the directory a WorkSpace is born into: the
+# organizational unit its computer object is created in, and the Group Policy Object linked
+# there that opens the machine to its operator. The host being built is never contacted; at
+# the moment this runs, it does not exist yet.
+#
+# REQUIRED INPUTS — declared empty in defaults and supplied by the playbook.
+#
+#   remote_management_policy.target_ou         DN of the OU the WorkSpace's computer object is
+#                                              created in. Created natively when absent, then the
+#                                              GPO is linked to it. The playbook passes the same
+#                                              inventory value it hands the domain join.
+#
+#   remote_management_policy.operator_address  The IPv4 address the operator's converge arrives
+#                                              from. The GPO's firewall rule admits this address
+#                                              alone to TCP 5985. Resolved per run.
+#
+# WHAT THE CALLER GETS BACK: the registered result '__remote_management_policy_set__', whose
+# .result.actions lists what was written (or, in check mode, what would have been), and
+# .result.gpo_id names the policy.
+#
+# WHAT THE CALLER MUST KNOW: this is the test domain's stand-in for a production directory's
+# standing configuration. It writes only what a WorkSpace needs to be reached; the LAPS policy
+# itself is the domain's to deliver (the test domain's Default Domain Policy already does), and
+# this role does not touch it.
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'remote_management_policy'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    Prepares, on a domain controller, the organizational unit a WorkSpace is created in and the
+    Group Policy Object linked there that opens the machine to its operator: the WinRM HTTP
+    listener, the firewall opening for the operator address, the unfiltered remote token, and
+    the network and Remote Desktop logon rights the LAPS-managed administrator needs. Compares
+    before every write, so a second run reports no change.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'grouppolicy', 'activedirectory', 'winrm', 'security']
+
+dependencies: []

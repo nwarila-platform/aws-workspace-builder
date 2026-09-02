@@ -1,0 +1,186 @@
+# ============================================================================================= #
+# File: '{{ role_path }}/tasks/present_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Hands the built-in Administrator account to Windows LAPS with Active Directory as the escrow:
+# the mechanism that connects this guest to its domain controller and sets the RID-500 password
+# FROM LAPS rather than from any value a repository could hold. No password crosses Ansible in
+# either direction — LAPS generates it on the guest, sets it locally, and escrows it to the
+# computer object; an administrator reads it back with Get-LapsADPassword, never through this
+# role.
+#
+# PRECONDITIONS this role asserts by failing rather than checking: the host is domain-joined
+# (domain_member runs earlier in the play) and the DIRECTORY is prepared — schema extended with
+# Update-LapsADSchema and the computer's OU granted SELF password-write with
+# Set-LapsADComputerSelfPermission, both one-time forest-side acts that are not a guest role's
+# to perform. A directory missing either fails the handler's processing pass loudly.
+#
+# There is no BEGIN stage because there is no action to decide: every registry write below
+# converges itself, and the handler pattern carries the decision — processing runs exactly when
+# a policy value actually moved. Windows Server 2022 carries LAPS natively (2023-04 update);
+# the STIG base AMI is patched monthly, so the CSP and cmdlet are present on every launch.
+#
+# END is gated on check mode alone: it reads the policy key PROCESS writes, and under --check
+# that key legitimately does not exist yet.
+#
+# ============================================================================================= #
+---
+#region ------ [ Process: Hand The Built-In Administrator To Windows LAPS ] ------------------- #
+
+- name: 'PROCESS | Hand The Built-In Administrator To Windows LAPS'
+  vars:
+    __policy_key__: 'HKLM:\Software\Microsoft\Policies\LAPS'
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Escrow To Active Directory ] ------------------------------------ #
+    # 2 is the CSP's Active Directory backing. Written literally rather than offered: the DC is
+    # where a WorkSpace's credential lives, and an input here would be a knob whose only other
+    # settings (0 disabled, 1 Entra) break the deployment's design.
+
+    - name: 'PROCESS | Escrow The Managed Password To Active Directory'
+      notify: 'laps-admin-policy-processing-required'
+
+      ansible.windows.win_regedit:
+        data: 2
+        name: 'BackupDirectory'
+        path: "{{ __policy_key__ }}"
+        state: 'present'
+        type: 'dword'
+
+    #endregion --- [ Process: Escrow To Active Directory ] ------------------------------------ #
+
+    #region ------ [ Process: Manage The Built-In Account By SID ] ---------------------------- #
+    # UNSET is the deliberate state: with no AdministratorAccountName value, LAPS manages the
+    # built-in administrator by its well-known RID-500 SID, which survives a rename. A leftover
+    # named value would silently manage some other account, so absence is converged rather than
+    # assumed. delete_key stays false — only the value goes, never the policy key around it.
+
+    - name: 'PROCESS | Manage The Built-In Account By Well-Known SID'
+      notify: 'laps-admin-policy-processing-required'
+
+      ansible.windows.win_regedit:
+        delete_key: false
+        name: 'AdministratorAccountName'
+        path: "{{ __policy_key__ }}"
+        state: 'absent'
+
+    #endregion --- [ Process: Manage The Built-In Account By SID ] ---------------------------- #
+
+    #region ------ [ Process: Declare The Password Policy ] ----------------------------------- #
+
+    - name: 'PROCESS | Declare The Generated Password Length'
+      notify: 'laps-admin-policy-processing-required'
+
+      ansible.windows.win_regedit:
+        data: "{{ laps_admin_running.policy.password_length | int }}"
+        name: 'PasswordLength'
+        path: "{{ __policy_key__ }}"
+        state: 'present'
+        type: 'dword'
+
+    # ----------------------------------------------------------------------------------------- #
+
+    - name: 'PROCESS | Declare The Generated Password Complexity'
+      notify: 'laps-admin-policy-processing-required'
+
+      ansible.windows.win_regedit:
+        data: "{{ laps_admin_running.policy.password_complexity | int }}"
+        name: 'PasswordComplexity'
+        path: "{{ __policy_key__ }}"
+        state: 'present'
+        type: 'dword'
+
+    # ----------------------------------------------------------------------------------------- #
+
+    - name: 'PROCESS | Declare The Rotation Age'
+      notify: 'laps-admin-policy-processing-required'
+
+      ansible.windows.win_regedit:
+        data: "{{ laps_admin_running.policy.password_age_days | int }}"
+        name: 'PasswordAgeDays'
+        path: "{{ __policy_key__ }}"
+        state: 'present'
+        type: 'dword'
+
+    #endregion --- [ Process: Declare The Password Policy ] ----------------------------------- #
+
+    #region ------ [ Process: Apply The Policy Before The Proof ] ----------------------------- #
+    # Flushed here, not at play end, so END below reads post-processing state and a processing
+    # failure is attributed to this role rather than to wherever the play happened to finish.
+
+    - name: 'PROCESS | Apply Any Pending Policy Processing'
+      ansible.builtin.meta: 'flush_handlers'
+
+    #endregion --- [ Process: Apply The Policy Before The Proof ] ----------------------------- #
+
+  # Begin the 'Always' block
+  always:
+
+    #region ------ [ Always: Apply Any Pending Policy Processing ] ---------------------------- #
+    # Ansible does not run handlers after a play failure, so a policy write that landed before
+    # a later task failed would otherwise leave the DC never contacted.
+
+    - name: 'PROCESS | Apply Any Pending Policy Processing Even After A Failure'
+      ansible.builtin.meta: 'flush_handlers'
+
+    #endregion --- [ Always: Apply Any Pending Policy Processing ] ---------------------------- #
+
+#endregion --- [ Process: Hand The Built-In Administrator To Windows LAPS ] ------------------- #
+
+
+#region ------ [ End: Prove The Policy LAPS Will Process ] ------------------------------------ #
+
+- name: 'END | Prove The Policy LAPS Will Process'
+  vars:
+    __policy_key__: 'HKLM:\Software\Microsoft\Policies\LAPS'
+  when: not ansible_check_mode
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Read The Policy Key Back ] ------------------------------------------ #
+    # The read is what the CSP will actually process, not what this run intended to write: a
+    # value clamped, retyped or edited by hand would otherwise rot silently until the next
+    # rotation surprised someone.
+
+    - name: 'END | Read The Policy Key Back'
+      register: '__laps_admin_policy__'
+
+      ansible.windows.win_reg_stat:
+        path: "{{ __policy_key__ }}"
+
+    #endregion --- [ End: Read The Policy Key Back ] ------------------------------------------ #
+
+    #region ------ [ End: Prove The Declared Policy Landed Verbatim ] ------------------------- #
+    # The name-absence clause is load-bearing: a present AdministratorAccountName would point
+    # LAPS at some other account while every numeric value still matched.
+
+    - name: 'END | Prove The Declared Policy Landed Verbatim'
+      vars:
+        __properties__: "{{ __laps_admin_policy__.properties | default({}) }}"
+      ansible.builtin.assert:
+        fail_msg: >-
+          The LAPS policy at '{{ __policy_key__ }}' is not the declared one: expected
+          BackupDirectory=2,
+          PasswordLength={{ laps_admin_running.policy.password_length }},
+          PasswordComplexity={{ laps_admin_running.policy.password_complexity }},
+          PasswordAgeDays={{ laps_admin_running.policy.password_age_days }} and no
+          AdministratorAccountName value. A mismatch here means the write was altered between
+          converge and proof.
+        quiet: true
+        that:
+          - __laps_admin_policy__.exists | default(false)
+          - (__properties__['BackupDirectory']['value'] | default(-1) | int) == 2
+          - (__properties__['PasswordLength']['value'] | default(-1) | int)
+            == (laps_admin_running.policy.password_length | int)
+          - (__properties__['PasswordComplexity']['value'] | default(-1) | int)
+            == (laps_admin_running.policy.password_complexity | int)
+          - (__properties__['PasswordAgeDays']['value'] | default(-1) | int)
+            == (laps_admin_running.policy.password_age_days | int)
+          - "'AdministratorAccountName' not in __properties__"
+
+    #endregion --- [ End: Prove The Declared Policy Landed Verbatim ] ------------------------- #
+
+#endregion --- [ End: Prove The Policy LAPS Will Process ] ------------------------------------ #

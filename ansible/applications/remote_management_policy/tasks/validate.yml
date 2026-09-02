@@ -1,0 +1,53 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/validate.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Validates the merged remote_management_policy configuration after the v3 loader merge, on
+# the CONTROLLER, before anything touches the domain controller.
+#
+# Two of these inputs are written into the directory: the OU becomes the link target and the
+# address becomes the only source the firewall rule admits. A malformed OU fails the link in
+# an unhelpful way an hour of play later; a malformed address fails nothing at all and simply
+# opens the host to nobody. Both shapes are therefore checked here, where the answer arrives in
+# a second.
+#
+# meta/main.yml describes these inputs; this file is what enforces them.
+#
+# =========================================================================================== #
+---
+- name: 'VALIDATE | Require A Policy Name'
+  ansible.builtin.assert:
+    that:
+      - remote_management_policy_running.name | default('') | length > 0
+      - remote_management_policy_running.name is match('^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$')
+    fail_msg: >-
+      Refusing to write policy: remote_management_policy.name must be a GPO display name of 1-64
+      characters (letters, digits, spaces, dots, underscores and hyphens, not starting with a
+      space or punctuation). The GPO is resolved by this name on every run.
+    quiet: true
+
+- name: 'VALIDATE | Require The OU The WorkSpace Is Created In'
+  ansible.builtin.assert:
+    that:
+      - remote_management_policy_running.target_ou | default('') | length > 0
+      - remote_management_policy_running.target_ou is match('^OU=[^,]+(,(OU|DC)=[^,]+)+$')
+    fail_msg: >-
+      Refusing to write policy: remote_management_policy.target_ou must be the distinguished name
+      of an organizational unit (OU=...,DC=...,DC=...). It is where the WorkSpace's computer
+      object is created and where the GPO is linked, so the playbook supplies the single
+      inventory value the domain join uses too. See meta/main.yml.
+    quiet: true
+
+- name: 'VALIDATE | Require The Operator Address The Rule Admits'
+  ansible.builtin.assert:
+    that:
+      - remote_management_policy_running.operator_address | default('') | length > 0
+      - >-
+        remote_management_policy_running.operator_address is
+        match('^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$')
+    fail_msg: >-
+      Refusing to write policy: remote_management_policy.operator_address must be the IPv4
+      address the operator's converge arrives from. The GPO's firewall rule admits it alone to
+      TCP 5985, so a policy written for the wrong address opens the host to nobody who can use
+      it. The playbook resolves it per run. See meta/main.yml.
+    quiet: true

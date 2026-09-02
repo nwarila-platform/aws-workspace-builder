@@ -1,0 +1,90 @@
+# =========================================================================================== #
+# File: '.gitignore'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# DEFAULT-DENY, EXPLICIT INCLUDES ONLY. Nothing in this working tree is tracked unless it is
+# explicitly allowed below, by name — no wildcard allowances. Adding a new file therefore
+# requires allowing it here first — that is deliberate: it makes publishing a file an
+# explicit act rather than an accident.
+#
+# =========================================================================================== #
+
+# Ignore everything ...
+**
+
+# --- [ directory spine ] -------------------------------------------------------------------- #
+# Git does not descend into an excluded directory, so every directory on the path to an
+# allowed file is re-included by name. This publishes no files by itself: files inside these
+# directories stay ignored until named in a section below.
+!/.github/
+!/.github/workflows/
+!/ansible/
+!/ansible/applications/
+!/ansible/applications/*/
+!/ansible/applications/*/defaults/
+!/ansible/applications/*/files/
+!/ansible/applications/*/handlers/
+!/ansible/applications/*/meta/
+!/ansible/applications/*/tasks/
+!/ansible/applications/*/vars/
+!/ansible/inventory/
+!/ansible/playbooks/
+!/scripts/
+!/terraform/
+
+# --- [ allowed: repository configuration ] -------------------------------------------------- #
+!/.editorconfig
+!/.github/ansible-framework-pin
+!/.gitignore
+!/.yamllint.yml
+
+# --- [ allowed: top-level documents ] ------------------------------------------------------- #
+!/LICENSE
+!/README.md
+!/SECURITY.md
+!/requirements-quality.txt
+!/requirements-quality.yml
+
+# --- [ allowed: GitHub configuration ] ------------------------------------------------------ #
+!/.github/CODEOWNERS
+!/.github/renovate.json5
+!/.github/terraform-framework-pin
+!/.github/workflows/aws-deploy.yml
+!/.github/workflows/aws-reaper.yml
+!/.github/workflows/powershell.yml
+!/.github/workflows/quality.yml
+
+# --- [ allowed: the ansible tree ] ---------------------------------------------------------- #
+# Role entries use the two ratified wildcard shapes ONLY: the role-name segment of an
+# otherwise fully-explicit path. Every role carries the same file set, so a per-role explicit
+# list would be forty copies of these lines. Materialized files/<Name>.ps1 copies are build
+# artifacts and are deliberately NEVER allowlisted; only each role's .stub marker is tracked.
+!/ansible/applications/*/README.md
+!/ansible/applications/*/defaults/main.yml
+!/ansible/applications/*/files/Get-InstalledSoftware.ps1.stub
+!/ansible/applications/*/files/Get-LapsCredential.ps1.stub
+!/ansible/applications/*/files/Set-RemoteManagementPolicy.ps1.stub
+!/ansible/applications/*/handlers/main.yml
+!/ansible/applications/*/meta/main.yml
+!/ansible/applications/*/tasks/main.yml
+!/ansible/applications/*/tasks/present_windows.yml
+!/ansible/applications/*/tasks/validate.yml
+!/ansible/applications/*/vars/windows.yml
+!/ansible/inventory/README.md
+!/ansible/inventory/aws_ec2.yml
+!/ansible/inventory/domain_controllers.yml
+!/ansible/playbooks/aws-workspace-builder-aws.yml
+
+# --- [ allowed: scripts ] ------------------------------------------------------------------- #
+!/scripts/Get-InstalledSoftware.pester.ps1
+!/scripts/Get-InstalledSoftware.ps1
+!/scripts/Get-LapsCredential.pester.ps1
+!/scripts/Get-LapsCredential.ps1
+!/scripts/Set-RemoteManagementPolicy.pester.ps1
+!/scripts/Set-RemoteManagementPolicy.ps1
+!/scripts/compose-and-run.sh
+!/scripts/materialize-role-scripts.sh
+
+# --- [ allowed: terraform (data-only; resources live in the pinned framework) ] -------------- #
+!/terraform/README.md
+!/terraform/aws.tfvars

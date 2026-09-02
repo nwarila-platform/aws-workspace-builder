@@ -1,0 +1,53 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for openssh_server. Description-only (style guide 8): NOT an enforcing argument
+# spec. The role's tasks/validate.yml enforces its merged-config guards.
+#
+# REQUIRED INPUTS — two:
+#
+#   openssh_server.capability.payload_path  ABSOLUTE path, on the controller, of the OpenSSH
+#                                           server Features on Demand cab for the guest's build
+#                                           (OpenSSH-Server-Package~31bf3856ad364e35~amd64~~.cab
+#                                           for Windows Server 2022). The role carries it to the
+#                                           guest and installs with Windows Update forbidden as a
+#                                           source. The playbook supplies it from the
+#                                           openssh_payload extra-var.
+#
+#   openssh_server.authorized_key.bucket    The S3 bucket that holds the operator's public key.
+#                                           Account-scoped -- <account-id>-ansible -- so only the
+#                                           pipeline knows it; the playbook derives it from the
+#                                           aws_account_id extra-var. The object name and its
+#                                           sha256 are pinned in defaults/main.yml and rotate
+#                                           together.
+#
+# Everything else -- the capability identity, the staging directory, the service name, the port
+# and the administrative keys path -- is a Windows or OpenSSH contract rather than a site choice,
+# so it carries a real default and the playbook supplies nothing.
+#
+# WHAT THE CALLER MUST KNOW: this role runs over WinRM, authenticated with the LAPS credential,
+# on a host workspace_baseline has already sealed. It assumes no SSH and no authorized key,
+# because there are none. The CONTROLLER fetches the operator's public key from the bucket with
+# its own AWS credentials and verifies it against the pinned digest; the guest receives the key's
+# bytes over the WinRM session and nothing it could fetch anything with.
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'openssh_server'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    Gives a sealed Windows host its SSH transport back, over WinRM and the LAPS credential:
+    installs the in-box OpenSSH server capability, installs the operator's public key from the
+    account's ansible bucket with the ACL sshd insists on, starts the service and opens the port.
+    The deliberate reverse of workspace_baseline, and the step that lets an image build continue
+    after being reached the only way a real WorkSpace can be reached.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'openssh', 'winrm', 'workspaces', 'transport']
+
+dependencies: []

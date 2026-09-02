@@ -1,0 +1,58 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the workspace_builder role. The v3 loader merges the OS
+# overlay in vars/ over this map and publishes the result as 'workspace_builder_running'; tasks
+# read only the merged map, never these keys directly.
+#
+# WHAT BELONGS HERE: values that are universally safe — true for anyone running this role,
+# whatever their account or directory. Only the manifest location qualifies: where a guest
+# records what it stands in for is this role's own contract with everything that reads it.
+#
+# WHAT DOES NOT: anything deployment-specific. The production workspace this host stands in for
+# (directory, bundle, user) and the stand-in's own identity (instance, name, image, address)
+# change with every site and every run. The interface declares empty values here; the PLAYBOOK
+# supplies the real values where they are visible and changeable. See meta/main.yml and
+# tasks/validate.yml.
+#
+# =========================================================================================== #
+---
+workspace_builder_defaults:
+
+  #region ------ [ The production workspace ] ------------------------------------------------- #
+
+  # The WorkSpace this stand-in mirrors: the directory it would be registered in, the bundle
+  # whose image this build reproduces, and the user create-workspaces would be invoked for.
+  # Metadata, recorded verbatim in the manifest — the stand-in cannot and does not call the
+  # WorkSpaces API with them.
+  workspace:
+    directory_id: ''
+    bundle_id: ''
+    user_name: ''
+
+  #endregion --- [ The production workspace ] ------------------------------------------------- #
+
+  #region ------ [ The stand-in identity ] ---------------------------------------------------- #
+
+  # What this host actually is, read from the run's own inventory by the playbook: the EC2
+  # instance id stands where the WorkSpaces API would return a WorkSpace id, the Name-tag
+  # hostname stands for ComputerName, and the image id names the base the build started from.
+  identity:
+    workspace_id: ''
+    computer_name: ''
+    image_id: ''
+    private_ip: ''
+
+  #endregion --- [ The stand-in identity ] ---------------------------------------------------- #
+
+  #region ------ [ The manifest ] ------------------------------------------------------------- #
+
+  # Where the guest records the mapping. ProgramData because the manifest is machine state, not
+  # user state: it must survive every profile and be readable by anything on the host. The
+  # directory and file are separate values because the directory is also the ACL boundary.
+  manifest:
+    directory: 'C:\ProgramData\AWSWorkspaceBuilder'
+    filename: 'workspace.json'
+
+  #endregion --- [ The manifest ] ------------------------------------------------------------- #

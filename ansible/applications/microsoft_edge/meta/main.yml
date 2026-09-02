@@ -1,0 +1,26 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Role metadata for the microsoft_edge STUB. Description-only: NOT an enforcing argument spec.
+# The finished role's tasks/validate.yml will enforce its merged-config guards.
+#
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'microsoft_edge'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    STUB reserving the WorkSpace image catalog product 'Microsoft-Corporation_Microsoft-Edge' at fleet pin 151.0.4129.107. The
+    present leg refuses loudly until the role is finished from the google_chrome pattern and
+    its artifact lands in the application repository.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'software', 'stub']
+
+dependencies: []

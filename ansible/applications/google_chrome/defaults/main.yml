@@ -1,0 +1,62 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the google_chrome role. The v3 loader merges the OS
+# overlay in vars/ over this map and publishes the result as 'google_chrome_running'; tasks read
+# only the merged map, never these keys directly.
+#
+# THE CATALOG PATTERN. This role is the exemplar for the WorkSpace image's per-product roles:
+# every catalog product carries this same shape — an ARP identity, a staging location, a bounded
+# install, and an artifact layout keyed by <version> — and differs only in the values below plus
+# whatever post-install state the product itself owns. Each role stays 100% independent: shared
+# shape, no shared code beyond the loader and the pair-tested ARP reader.
+#
+# WHAT BELONGS HERE: values that are universally safe — the product's Add/Remove Programs
+# identity, the vendor's artifact layout, the silent install's time bound.
+#
+# WHAT DOES NOT: anything deployment-specific. The bucket carries an account id and the pinned
+# version and digest change with every artifact drop, so the PLAYBOOK supplies them where they
+# are visible and changeable. See meta/main.yml and tasks/validate.yml.
+#
+# =========================================================================================== #
+---
+google_chrome_defaults:
+
+  #region ------ [ Install ] ------------------------------------------------------------------ #
+
+  install:
+    # Staging directory on the guest. The installer is removed from here after execution.
+    #
+    # Genuinely site-specific: application control (AppLocker/WDAC) and endpoint protection are
+    # commonly configured to permit execution only from named paths, so a site may have to stage
+    # the installer somewhere its security software already trusts. This default suits a host
+    # with no such policy; it is expected to be overridden where one exists.
+    staging_dir: 'C:\Windows\Temp\google-chrome-install'
+
+    # A wrong silent switch can leave the installer waiting on a dialog instead of returning.
+    # Bounding it here fails the run inside Ansible rather than hanging the play.
+    timeout_seconds: 600
+
+  #endregion --- [ Install ] ------------------------------------------------------------------ #
+
+  #region ------ [ Product identity ] --------------------------------------------------------- #
+
+  # Install state is read from Add/Remove Programs, not from the vendor's own key. The ARP entry
+  # carries the version AND the install location, is a documented Windows contract rather than a
+  # vendor implementation detail, and is removed on uninstall by definition.
+  arp:
+    display_name: 'Google Chrome'
+
+  #endregion --- [ Product identity ] --------------------------------------------------------- #
+
+  #region ------ [ Installer layout ] --------------------------------------------------------- #
+
+  # The application-repository object key, keyed by the pinned version the playbook supplies.
+  # The vendor folder is named exactly as the product's ARP Publisher spells it, per the org
+  # apprepo convention. The enterprise standalone MSI, because the consumer bootstrapper reaches
+  # for the internet mid-install and an image build must install only what the artifact carries.
+  installer:
+    path: 'Google LLC/Google Chrome/<version>/googlechromestandaloneenterprise64.msi'
+
+  #endregion --- [ Installer layout ] --------------------------------------------------------- #

@@ -1,0 +1,93 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/validate.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Validates the merged openssh_server configuration after the v3 loader merge, on the CONTROLLER,
+# before anything touches the guest.
+#
+# This role is the only way back to SSH on a host that currently has none, and it runs over a
+# transport held open by a credential that expires. Checking the shapes here costs a second;
+# discovering a mistyped path afterwards costs the WinRM detour again, LAPS wait included.
+#
+# meta/main.yml describes these inputs; this file is what enforces them.
+#
+# =========================================================================================== #
+---
+- name: 'VALIDATE | Require A Capability DISM Can Resolve'
+  ansible.builtin.assert:
+    that:
+      - openssh_server_running.capability.name is match('^[A-Za-z0-9.]+~[A-Za-z0-9.]*~[A-Za-z0-9.]*~[A-Za-z0-9.-]*~[0-9.]+$')
+      - openssh_server_running.capability.staging_dir is match('^[A-Za-z]:\\\\[^\\\\]')
+      - openssh_server_running.capability.staging_dir is not match('\\\\$')
+    fail_msg: >-
+      Refusing to continue: capability.name must be a DISM capability identity of the form
+      Name~~~~Version, and capability.staging_dir must be an absolute, drive-letter-rooted
+      Windows directory below the root, without a trailing backslash -- it is created, filled
+      with the payload and REMOVED, so it must never resolve to a drive root.
+    quiet: true
+
+# On the CONTROLLER, where the cab is. 'is file' tests the controller's filesystem, which is the
+# right side: the guest has no OpenSSH and this role is about to carry the payload to it. Absolute
+# is required rather than resolved: the composer runs ansible-playbook from the framework checkout,
+# so a relative path would quietly resolve against a directory the operator never sees.
+- name: 'VALIDATE | Require The Features On Demand Payload On The Controller'
+  ansible.builtin.assert:
+    that:
+      - openssh_server_running.capability.payload_path | default('') | length > 0
+      - openssh_server_running.capability.payload_path is abs
+      - openssh_server_running.capability.payload_path is file
+      - openssh_server_running.capability.payload_path | basename is match('(?i)^[^\\\\/]+\.cab$')
+    fail_msg: >-
+      Refusing to continue: capability.payload_path must be the ABSOLUTE path, on this
+      controller, of the OpenSSH server Features on Demand cab
+      (OpenSSH-Server-Package~31bf3856ad364e35~amd64~~.cab for Windows Server 2022). The
+      playbook supplies it from -e openssh_payload=<path>. The guest cannot install the
+      capability from Windows Update behind the domain's update policy, and this is the one play
+      that can carry it there -- so a missing cab is refused here, before the LAPS wait, rather
+      than discovered after it.
+    quiet: true
+
+- name: 'VALIDATE | Require The Service And Port The Build Returns Over'
+  ansible.builtin.assert:
+    that:
+      - openssh_server_running.service.name | default('') | length > 0
+      - openssh_server_running.firewall.rule_name | default('') | length > 0
+      - openssh_server_running.firewall.port | int > 0
+      - openssh_server_running.firewall.port | int < 65536
+    fail_msg: >-
+      Refusing to continue: service.name, firewall.rule_name and a real firewall.port are how the
+      rest of the build gets its transport back. A host that installs the capability and opens
+      nothing is still unreachable.
+    quiet: true
+
+- name: 'VALIDATE | Require A Key Location sshd Will Actually Read'
+  ansible.builtin.assert:
+    that:
+      - openssh_server_running.authorized_keys.path is match('^[A-Za-z]:\\\\')
+      - openssh_server_running.authorized_keys.principals | length > 0
+    fail_msg: >-
+      Refusing to install the key: authorized_keys.path must be an absolute, drive-letter-rooted
+      Windows path, and authorized_keys.principals must name the accounts allowed to write it.
+      Windows sshd silently IGNORES an administrative keys file that any other account can write,
+      which presents as a key that is installed, correct, and rejected.
+    quiet: true
+
+# The bucket is the one value the caller must say -- it is account-scoped, and only the pipeline
+# knows the account. The digest is checked for shape here and against the object's contents
+# before anything is written, so a key nobody reviewed cannot become the key that opens the host.
+- name: 'VALIDATE | Require A Bucket, An Object And A Digest To Read The Public Key From'
+  ansible.builtin.assert:
+    that:
+      - openssh_server_running.authorized_key.bucket | default('', true) | string | trim
+        is match('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$')
+      - openssh_server_running.authorized_key.object | default('', true) | string | trim | length > 0
+      - openssh_server_running.authorized_key.object | default('', true) | string | trim is not match('^/')
+      - openssh_server_running.authorized_key.sha256 | default('') is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      Refusing to continue: authorized_key.bucket must name the S3 bucket that holds the
+      operator's public key (the playbook derives it from the deployment account as
+      <account-id>-ansible), authorized_key.object must name the key object inside it without a
+      leading slash, and authorized_key.sha256 must be the lowercase 64-character sha256 of that
+      object -- it is verified against the contents before the key is ever installed. See
+      meta/main.yml.
+    quiet: true

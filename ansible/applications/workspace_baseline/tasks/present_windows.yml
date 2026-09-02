@@ -1,0 +1,251 @@
+# ============================================================================================= #
+# File: '{{ role_path }}/tasks/present_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Turns the EC2 stand-in into something shaped like a WorkSpace: reachable over the WinRM listener
+# its DOMAIN gave it, and NOT reachable with the launch key. A real WorkSpace is born domain-joined
+# with no key pair and no user_data hook; the only credential that ever reaches it is the one the
+# directory escrows, and the only listener it answers on is the one Group Policy configured. This
+# role removes the one advantage EC2 gave us, so the rest of the build has to earn its way in the
+# way production does.
+#
+# NOTHING HERE BUILDS THE LISTENER. A WorkSpace gets its WinRM listener from the domain -- the
+# "Allow remote server management through WinRM" policy makes the service publish an HTTP listener
+# on 5985, and a policy-delivered firewall rule admits the administrators' addresses. The stand-in
+# gets the same policy the same way, by being joined to the same domain, so this role PROVES the
+# policy took rather than building a listener that would hide a domain which never delivered it.
+# The proof is native: the service is read, the port is waited on where the guest sees it, and
+# then it is waited on from the controller, which is the address that actually has to get in.
+#
+# THE ORDER IS THE SAFETY. BEGIN and PROCESS prove the new way in from the controller while the
+# old one still works. Only END revokes the launch key, and it is last precisely so that a failure
+# anywhere above leaves a host this play can still reach. A role that closed the door first and
+# tested afterwards would turn every mistake into a dead instance.
+#
+# The capability removal cannot run inline: OpenSSH is carrying this session, and uninstalling it
+# would kill the connection mid-task and fail the play for doing exactly what it was asked to do.
+# It is handed to the Task Scheduler instead, on a registration-triggered delay, and unregisters
+# itself when it is done. The play's own wait for port 22 to go quiet is what proves it ran.
+#
+# 'C:\ProgramData\ssh' is deliberately NOT removed. The host keys live there, and the controller
+# reaches this host with StrictHostKeyChecking=accept-new: keys that survive the round trip mean
+# the SSH plays after the WinRM detour connect to a host the controller still recognises.
+#
+# ============================================================================================= #
+---
+#region ------ [ Begin: Prove The Domain Delivered The Listener ] ----------------------------- #
+
+- name: 'BEGIN | Prove The Way In A WorkSpace Answers On'
+
+  # Begin The 'Begin' Block
+  block:
+
+    #region ------ [ Begin: Read The Service The Listener Belongs To ] ------------------------ #
+    # Read, not converged: on a domain member the WinRM service is the domain's to run, and a
+    # role that started it would be papering over a policy that did not. Ungated, so a converged
+    # host proves the same thing a fresh one does.
+
+    - name: 'BEGIN | Read The WinRM Service'
+      register: '__workspace_baseline_winrm_service__'
+
+      ansible.windows.win_service_info:
+        name: "{{ workspace_baseline_running.winrm.service_name }}"
+
+    - name: 'BEGIN | Prove The WinRM Service Is Running And Automatic'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The '{{ workspace_baseline_running.winrm.service_name }}' service is
+          {{ __workspace_baseline_winrm_service__.services[0].state | default('absent') }} with start
+          mode {{ __workspace_baseline_winrm_service__.services[0].start_mode | default('unknown') }}.
+          A WorkSpace answers on the WinRM listener its domain configures, so this service has to be
+          running and automatic before the launch key can be revoked -- otherwise the seal produces a
+          host with no way in at all. Refusing to seal; the domain's WinRM policy is what should
+          have left the service in that state.
+        quiet: true
+        that:
+          - __workspace_baseline_winrm_service__.exists | bool
+          - __workspace_baseline_winrm_service__.services | length == 1
+          - __workspace_baseline_winrm_service__.services[0].state == 'started'
+          - __workspace_baseline_winrm_service__.services[0].start_mode in ['auto', 'delayed']
+
+    #endregion --- [ Begin: Read The Service The Listener Belongs To ] ------------------------ #
+
+    #region ------ [ Begin: Wait For The Policy-Delivered Listener ] -------------------------- #
+    # Where the guest sees it first. The listener appears when the WinRM service processes the
+    # "Allow remote server management through WinRM" policy, which arrives by Group Policy on the
+    # domain's own refresh cycle -- so this is a bounded wait rather than a snap assertion. A port
+    # answering here proves the POLICY; whether the outside world can reach it is the next block.
+    #
+    # The wait's own failure is a timeout against a loopback address, which says nothing about
+    # policy; it is registered and ignored so the assertion below can say what a silent port means
+    # -- the same shape host_readiness uses for the same reason.
+
+    - name: 'BEGIN | Wait For The Policy-Delivered WinRM Listener On The Guest'
+      changed_when: false
+      ignore_errors: true
+      register: '__workspace_baseline_winrm_listener__'
+
+      ansible.windows.win_wait_for:
+        connect_timeout: 5
+        delay: 0
+        host: '127.0.0.1'
+        port: "{{ workspace_baseline_running.winrm.port | int }}"
+        sleep: 5
+        state: 'started'
+        timeout: "{{ workspace_baseline_running.winrm.listener_timeout_seconds | int }}"
+
+    - name: 'BEGIN | Prove The Domain Delivered The Listener'
+      ansible.builtin.assert:
+        fail_msg: >-
+          Nothing answered on the guest's own port {{ workspace_baseline_running.winrm.port }}
+          within {{ workspace_baseline_running.winrm.listener_timeout_seconds }}s
+          ({{ __workspace_baseline_winrm_listener__.msg | default('no message') }}). The WinRM
+          service is running, so the listener it did not create is the one Group Policy delivers
+          through "Allow remote server management through WinRM" -- and that policy has not
+          reached this host, or does not exist in this domain. Refusing to seal: this role builds
+          no listener of its own, because a WorkSpace has no way to build one either.
+        quiet: true
+        that:
+          - __workspace_baseline_winrm_listener__ is not failed
+
+    #endregion --- [ Begin: Wait For The Policy-Delivered Listener ] -------------------------- #
+
+#endregion --- [ Begin: Prove The Domain Delivered The Listener ] ----------------------------- #
+
+
+#region ------ [ Process: Prove The WinRM Way In From The Controller ] ------------------------ #
+
+- name: 'PROCESS | Prove The WinRM Way In From The Controller Before Closing The Other'
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Prove The New Way In From The Controller ] ---------------------- #
+    # From the CONTROLLER, not the guest: a listener the host can see on itself proves nothing
+    # about the security group or the guest firewall. This is the last moment the mistake is
+    # cheap -- SSH still works, and a run that fails here leaves a reachable host to fix rather
+    # than a stranded one.
+    #
+    # A port check is the right tool exactly here and nowhere else in this repository: what is
+    # being proved is that a TCP connection reaches the listener through the security group AND
+    # the policy-delivered firewall rule, and no credential exists yet to prove anything more. The
+    # connection itself is proved later, by host_readiness, once the LAPS credential has been
+    # read.
+
+    - name: 'PROCESS | Prove The Controller Can Reach The WinRM Port'
+      changed_when: false
+      delegate_to: 'localhost'
+
+      ansible.builtin.wait_for:
+        connect_timeout: 5
+        delay: 0
+        host: "{{ ansible_host }}"
+        msg: >-
+          The WinRM listener answers on the guest, but this controller cannot reach
+          {{ ansible_host }}:{{ workspace_baseline_running.winrm.port }}. Refusing to revoke the
+          launch key while WinRM is unreachable -- that would strand the host. Two things admit
+          this address and both have to: the security group must carry this operator's address
+          for tcp/{{ workspace_baseline_running.winrm.port }} (the framework's debug_ip), and the
+          domain's "Windows Remote Management (HTTP-In)" firewall rule must admit it under the
+          profile this interface lands in -- which is never Domain on the stand-in, so a rule
+          scoped to the Domain profile or to the local subnet admits nobody here.
+        port: "{{ workspace_baseline_running.winrm.port }}"
+        sleep: 5
+        state: 'started'
+        timeout: "{{ workspace_baseline_running.winrm.reachability_timeout_seconds }}"
+
+    #endregion --- [ Process: Prove The New Way In From The Controller ] ---------------------- #
+
+#endregion --- [ Process: Prove The WinRM Way In From The Controller ] ------------------------ #
+
+
+#region ------ [ End: Revoke The Launch Key ] ------------------------------------------------- #
+
+- name: 'END | Revoke The Launch Key This Host Should Never Have Had'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Remove The Installed Launch Key ] ----------------------------------- #
+    # The framework's user_data wrote this file from IMDS at launch. Removing it is what actually
+    # revokes the key pair: everything below is about making the absence complete rather than
+    # merely effective. The parent directory is left alone on purpose -- it holds the host keys.
+
+    - name: 'END | Remove The Launch Key From The Administrators Authorized Keys'
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ workspace_baseline_running.ssh.authorized_keys_path }}"
+        state: 'absent'
+
+    #endregion --- [ End: Remove The Installed Launch Key ] ----------------------------------- #
+
+    #region ------ [ End: Close The Port user_data Opened ] ----------------------------------- #
+
+    - name: 'END | Close The OpenSSH Port'
+
+      community.windows.win_firewall_rule:
+        action: 'allow'
+        direction: 'in'
+        enabled: true
+        localport: 22
+        name: "{{ workspace_baseline_running.ssh.firewall_rule_name }}"
+        profiles: [ 'domain', 'private', 'public' ]
+        protocol: 'tcp'
+        state: 'absent'
+
+    #endregion --- [ End: Close The Port user_data Opened ] ----------------------------------- #
+
+    #region ------ [ End: Hand The Uninstall To The Scheduler ] ------------------------------- #
+    # THE LAST TASK OF THE ROLE, AND IT MUST STAY LAST. OpenSSH is carrying this session, so the
+    # uninstall runs after the play lets go: a registration-triggered task, delayed, as SYSTEM,
+    # which stops the service, removes the capability and unregisters itself. Three cmdlets and
+    # no logic, so the first-class-script rule is not in play; -ErrorAction SilentlyContinue on
+    # the stop because a service that is already down is the outcome asked for, not a failure.
+    #
+    # Nothing here waits for the result. Port 22 falling silent is the proof, and the playbook
+    # waits for that from the controller -- which is the same thing a person would check.
+
+    - name: 'END | Schedule The Deferred OpenSSH Removal'
+      vars:
+        __removal_command__: >-
+          Stop-Service -Name 'sshd' -Force -ErrorAction SilentlyContinue;
+          Remove-WindowsCapability -Online -Name '{{ workspace_baseline_running.ssh.capability_name }}';
+          Unregister-ScheduledTask -TaskName '{{ workspace_baseline_running.removal_task.name }}'
+          -TaskPath '{{ workspace_baseline_running.removal_task.path }}' -Confirm:$false
+
+      community.windows.win_scheduled_task:
+        actions:
+          - path: 'powershell.exe'
+            arguments: >-
+              -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{ __removal_command__ }}"
+        allow_demand_start: true
+        allow_hard_terminate: true
+        description: >-
+          Removes the OpenSSH server capability once the session that scheduled it has
+          disconnected, then unregisters itself. Registered by the workspace_baseline role to
+          make the EC2 stand-in match a WorkSpace, which has no OpenSSH and no launch key.
+        disallow_start_if_on_batteries: false
+        enabled: true
+        execution_time_limit: 'PT15M'
+        hidden: false
+        logon_type: 'service_account'
+        multiple_instances: 2
+        name: "{{ workspace_baseline_running.removal_task.name }}"
+        path: "{{ workspace_baseline_running.removal_task.path }}"
+        run_level: 'highest'
+        start_when_available: true
+        state: 'present'
+        stop_if_going_on_batteries: false
+        triggers:
+          - type: 'registration'
+            delay: "{{ workspace_baseline_running.removal_task.delay }}"
+        username: 'SYSTEM'
+        wake_to_run: false
+
+    #endregion --- [ End: Hand The Uninstall To The Scheduler ] ------------------------------- #
+
+#endregion --- [ End: Revoke The Launch Key ] ------------------------------------------------- #

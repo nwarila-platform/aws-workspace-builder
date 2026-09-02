@@ -1,0 +1,110 @@
+# ============================================================================================= #
+# File: '{{ role_path }}/tasks/present_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Records the WorkSpace stand-in identity on the guest: one JSON manifest carrying the production
+# WorkSpace this host mirrors (directory, bundle, user) beside what the host actually is (the EC2
+# instance standing in for the WorkSpace id, the Name-tag hostname standing for ComputerName, the
+# launch image, the private address).
+#
+# There is no BEGIN stage because there is no action to decide: both writes below converge
+# themselves — a directory that exists and a manifest whose bytes already match report no change,
+# so re-reading the machine first would decide nothing the modules do not already decide.
+#
+# END is deliberately ungated by any decision, so a converged host proves the same state as a
+# freshly built one. It is gated on check mode alone: the proof reads the file PROCESS writes,
+# and under --check that file legitimately does not exist yet.
+#
+# ============================================================================================= #
+---
+#region ------ [ Process: Record The Stand-In Manifest ] -------------------------------------- #
+
+- name: 'PROCESS | Record The Stand-In Manifest'
+  vars:
+    __manifest_path__: >-
+      {{ workspace_builder_running.manifest.directory }}\{{ workspace_builder_running.manifest.filename }}
+    __manifest__:
+      standin: true
+      workspace: "{{ workspace_builder_running.workspace }}"
+      identity: "{{ workspace_builder_running.identity }}"
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Ensure The Manifest Directory Exists ] -------------------------- #
+    # ProgramData is machine state: the directory is created explicitly rather than implied by
+    # the copy so its existence is a converged, reportable fact of its own.
+
+    - name: 'PROCESS | Ensure The Manifest Directory Exists'
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ workspace_builder_running.manifest.directory }}"
+        state: 'directory'
+
+    #endregion --- [ Process: Ensure The Manifest Directory Exists ] -------------------------- #
+
+    #region ------ [ Process: Publish The Manifest ] ------------------------------------------ #
+    # Content, not a template file: the manifest IS the merged configuration, and rendering it
+    # through a second on-disk representation would be one more copy of the same map to drift.
+    # win_copy compares checksums, so an unchanged mapping reports no change on every converge.
+
+    - name: 'PROCESS | Publish The Manifest'
+      ansible.windows.win_copy:
+        backup: false
+        content: "{{ __manifest__ | to_nice_json }}\n"
+        decrypt: true
+        dest: "{{ __manifest_path__ }}"
+        force: true
+
+    #endregion --- [ Process: Publish The Manifest ] ------------------------------------------ #
+
+#endregion --- [ Process: Record The Stand-In Manifest ] -------------------------------------- #
+
+
+#region ------ [ End: Prove The Manifest Round-Trips ] ---------------------------------------- #
+
+- name: 'END | Prove The Manifest Round-Trips'
+  vars:
+    __manifest_path__: >-
+      {{ workspace_builder_running.manifest.directory }}\{{ workspace_builder_running.manifest.filename }}
+  when: not ansible_check_mode
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Read The Manifest Back ] -------------------------------------------- #
+    # The read is the file that actually landed, not the value this run intended to write: a
+    # manifest a later hand edit or an encoding fault mangled would otherwise pass unnoticed
+    # until something built on this image failed to parse it.
+
+    - name: 'END | Read The Manifest Back'
+      register: '__workspace_builder_manifest__'
+
+      ansible.builtin.slurp:
+        src: "{{ __manifest_path__ }}"
+
+    #endregion --- [ End: Read The Manifest Back ] -------------------------------------------- #
+
+    #region ------ [ End: Prove The Recorded Identity Matches The Declaration ] --------------- #
+
+    - name: 'END | Prove The Recorded Identity Matches The Declaration'
+      vars:
+        __recorded__: "{{ __workspace_builder_manifest__.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        fail_msg: >-
+          The manifest at '{{ __manifest_path__ }}' does not parse back to the declared stand-in:
+          expected workspace {{ workspace_builder_running.workspace | to_json }} and identity
+          {{ workspace_builder_running.identity | to_json }}. A mismatch here means the write was
+          altered between publish and proof.
+        quiet: true
+        that:
+          - __recorded__.standin | bool
+          - __recorded__.workspace == workspace_builder_running.workspace
+          - __recorded__.identity == workspace_builder_running.identity
+
+    #endregion --- [ End: Prove The Recorded Identity Matches The Declaration ] --------------- #
+
+#endregion --- [ End: Prove The Manifest Round-Trips ] ---------------------------------------- #

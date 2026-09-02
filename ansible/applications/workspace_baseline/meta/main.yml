@@ -1,0 +1,42 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for workspace_baseline. Description-only (style guide 8): NOT an enforcing
+# argument spec. The role's tasks/validate.yml enforces its merged-config guards.
+#
+# REQUIRED INPUTS — none. Every value this role holds is a Windows or OpenSSH contract (the WinRM
+# service name and HTTP port, the DISM capability identity, the path user_data writes the launch
+# key to), not a site choice, so all of them carry real defaults and the playbook supplies nothing.
+#
+# WHAT THE CALLER MUST KNOW INSTEAD: this role deliberately makes the host unreachable over SSH.
+# It must run LAST in its play, and the play after it must reach the host some other way — the
+# playbook does that with the WinRM listener the DOMAIN delivers by Group Policy and the LAPS
+# credential the directory escrows. This role builds no listener: one it built would hide a
+# domain that never delivered one, which is the thing a WorkSpace has no way to fix. Running it
+# without that follow-on leaves an instance nobody can log in to.
+#
+# The role also requires that the domain's firewall rule for the listener admits the controller's
+# address, and that the controller's own address is permitted to reach 5985 (the framework's
+# debug_ip). It proves both from the controller BEFORE revoking anything, so a missing grant
+# fails while SSH still works.
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'workspace_baseline'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    Makes the EC2 WorkSpace stand-in match the posture of a real WorkSpace: proves the WinRM
+    listener the domain delivered answers for the transport a WorkSpace is reached on, then leaves
+    no launch key, no OpenSSH port and no OpenSSH server capability for the transport a WorkSpace
+    never had. Proves the way in before revoking the old one, and defers the OpenSSH uninstall to
+    the Task Scheduler because the session being removed is the one doing the removing.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'winrm', 'openssh', 'workspaces', 'security']
+
+dependencies: []
