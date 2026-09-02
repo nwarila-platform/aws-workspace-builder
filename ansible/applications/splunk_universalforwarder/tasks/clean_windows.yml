@@ -1,0 +1,120 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/clean_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# CLEAN IS IMAGE PREP, AND FOR A FORWARDER THAT MEANS GIVING UP ITS IDENTITY.
+#
+# splunkd generates a unique forwarder GUID the first time it runs and writes it to
+# etc/instance.cfg. That file is per-INSTANCE state, and an image is not an instance: a capture
+# taken with it present hands every desktop cloned from that image the same forwarder identity,
+# which a deployment server sees as one host flapping between machines rather than many hosts
+# reporting. Splunk's own guidance for cloning a forwarder is to remove it and let each machine
+# generate its own on first start.
+#
+# The present state already avoids creating it -- LAUNCHSPLUNK=0 means the forwarder is never
+# started during the build -- so on a clean build there is nothing here to remove. This state
+# exists because "nothing started it" is an assumption, and an image is the wrong place to trust
+# one: an operator who started the service to test it, or a converge that ran before that
+# property was set, would otherwise bake an identity nobody notices until the fleet reports
+# wrong. Removing the file is cheap; discovering the duplicate later is not.
+#
+# The service is stopped rather than disabled: unlike the SSM agent, a forwarder is SUPPOSED to
+# run on the desktop. It must simply not be running at the moment of capture, so that it starts
+# fresh -- and generates its own identity -- on each desktop's first boot.
+#
+# END is deliberately ungated, so a machine already prepared proves the same state as one being
+# prepared for the first time.
+#
+# =========================================================================================== #
+---
+#region ------ [ Process: Take The Identity Back Off The Image ] ------------------------------ #
+
+- name: 'PROCESS | Take The Forwarder Identity Off The Image'
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Stop The Forwarder ] -------------------------------------------- #
+    # Stopped, not disabled: it must run on the desktop, just not at capture. A forwarder that
+    # was never installed leaves no service, which is not a failure here.
+
+    - name: 'PROCESS | Stop The Forwarder Service For Capture'
+      failed_when: false
+      register: '__splunk_universalforwarder_stop__'
+
+      ansible.windows.win_service:
+        force_dependent_services: false
+        name: "{{ splunk_universalforwarder_running.install.service_name }}"
+        state: 'stopped'
+
+    #endregion --- [ Process: Stop The Forwarder ] -------------------------------------------- #
+
+    #region ------ [ Process: Remove The Per-Instance Identity ] ------------------------------ #
+    # The file each desktop must generate for itself. Absent is the converged state, so a build
+    # that never started the forwarder reports no change and a build that did is repaired.
+
+    - name: 'PROCESS | Remove The Per-Instance Forwarder Identity'
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ splunk_universalforwarder_running.install.instance_file }}"
+        state: 'absent'
+
+    #endregion --- [ Process: Remove The Per-Instance Identity ] ------------------------------ #
+
+#endregion --- [ Process: Take The Identity Back Off The Image ] ------------------------------ #
+
+
+#region ------ [ End: Prove The Image Carries No Identity ] ----------------------------------- #
+
+- name: 'END | Prove The Image Carries No Identity'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Re-Read The Machine ] ----------------------------------------------- #
+    # Read back rather than trusted from the converge above: what matters is the state of the
+    # machine at capture, so the machine is what answers.
+
+    - name: 'END | Re-Read The Identity File And The Service'
+      register: '__splunk_universalforwarder_capture__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          InstanceFile: "{{ splunk_universalforwarder_running.install.instance_file }}"
+          ServiceName: "{{ splunk_universalforwarder_running.install.service_name }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$InstanceFile, [System.String]$ServiceName)
+          $Service = Get-Service -Name:$ServiceName -ErrorAction:'SilentlyContinue'
+          $Status = If ($Null -eq $Service) { 'absent' } Else { [System.String]$Service.Status }
+          $Ansible.Changed = $False
+          $Ansible.Result = @{
+            identity_present = [System.IO.File]::Exists($InstanceFile)
+            service_status   = $Status
+            ready            = ((-not [System.IO.File]::Exists($InstanceFile)) -and
+                                ($Status -in @('absent', 'Stopped')))
+          }
+
+    #endregion --- [ End: Re-Read The Machine ] ----------------------------------------------- #
+
+    #region ------ [ End: Assert The Capture Is Safe ] ---------------------------------------- #
+
+    - name: 'END | Prove No Forwarder Identity Would Be Captured'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The image would carry a forwarder identity: instance.cfg present is
+          {{ __splunk_universalforwarder_capture__.result.identity_present }} and the service is
+          {{ __splunk_universalforwarder_capture__.result.service_status }}. Every desktop cloned
+          from this image would report as the same forwarder.
+        quiet: true
+        that: [ __splunk_universalforwarder_capture__.result.ready | default(false) ]
+
+    #endregion --- [ End: Assert The Capture Is Safe ] ---------------------------------------- #
+
+#endregion --- [ End: Prove The Image Carries No Identity ] ----------------------------------- #

@@ -1,0 +1,106 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/clean_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# CLEAN IS IMAGE PREP. A converged machine is not yet an image: before WorkSpaces will capture
+# one, the machine has to be put into the state AWS's Image Checker demands, and that state is
+# not the state a working desktop runs in. 'clean' is where a role says what it must give up to
+# be captured, which is why it is a state of the role that owns the software rather than a
+# separate teardown playbook that would have to know every product's internals.
+#
+# For this product the requirement is exact and quoted from the Image Checker's own guidance:
+#
+#   "Amazon SSM Agent must be disabled -- The Create Image process requires the Amazon SSM Agent
+#    service to be disabled."
+#
+# Disabled, not uninstalled. The agent stays on the image and every WorkSpace launched from it
+# carries it; what must not survive capture is a RUNNING agent, because its registration is
+# instance-specific and an image that carried a live one would hand every launched desktop the
+# same identity. So this state stops the service and sets its startup type to Disabled, and the
+# 'present' state remains what installs it.
+#
+# END is deliberately ungated, so a machine already prepared proves the same state as one being
+# prepared for the first time.
+#
+# =========================================================================================== #
+---
+#region ------ [ Process: Silence The Agent For Capture ] ------------------------------------- #
+
+- name: 'PROCESS | Silence The Agent For Capture'
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Stop It And Disable Its Start ] --------------------------------- #
+    # Both halves in one task because both are the requirement: a stopped service that would
+    # start itself on the next boot is not disabled, and a disabled service still running is not
+    # stopped. The module converges each independently and reports change only where it acted.
+
+    - name: 'PROCESS | Stop The Agent And Disable Its Startup'
+
+      ansible.windows.win_service:
+        force_dependent_services: false
+        name: "{{ amazon_ssm_agent_running.service.name }}"
+        start_mode: 'disabled'
+        state: 'stopped'
+
+    #endregion --- [ Process: Stop It And Disable Its Start ] --------------------------------- #
+
+#endregion --- [ Process: Silence The Agent For Capture ] ------------------------------------- #
+
+
+#region ------ [ End: Prove It Cannot Come Back ] --------------------------------------------- #
+
+- name: 'END | Prove It Cannot Come Back'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Re-Read The Service ] ----------------------------------------------- #
+    # The service is read back rather than trusted from the converge above: the Image Checker
+    # reads the machine, so the proof reads the machine too. A service that is absent entirely is
+    # not a failure here -- an image whose agent was never installed already satisfies "not
+    # running" -- so the read tolerates absence and the assertion below judges what it found.
+
+    - name: 'END | Re-Read The Service State'
+      register: '__amazon_ssm_agent_service__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          Name: "{{ amazon_ssm_agent_running.service.name }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$Name)
+          $Service = Get-Service -Name:$Name -ErrorAction:'SilentlyContinue'
+          $Ansible.Changed = $False
+          If ($Null -eq $Service) {
+            $Ansible.Result = @{ present = $False; status = ''; start_type = ''; ready = $True }
+            Return
+          }
+          $Ansible.Result = @{
+            present    = $True
+            status     = [System.String]$Service.Status
+            start_type = [System.String]$Service.StartType
+            ready      = ([System.String]$Service.Status -eq 'Stopped' -and
+                          [System.String]$Service.StartType -eq 'Disabled')
+          }
+
+    #endregion --- [ End: Re-Read The Service ] ----------------------------------------------- #
+
+    #region ------ [ End: Assert The Image Checker Would Pass ] ------------------------------- #
+
+    - name: 'END | Prove The Agent Is Stopped And Disabled'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The Image Checker requires the Amazon SSM Agent service to be disabled; found it
+          {{ __amazon_ssm_agent_service__.result.status | default('unreadable') }} with startup
+          type {{ __amazon_ssm_agent_service__.result.start_type | default('unreadable') }}. A
+          machine in this state will fail image creation.
+        quiet: true
+        that: [ __amazon_ssm_agent_service__.result.ready | default(false) ]
+
+    #endregion --- [ End: Assert The Image Checker Would Pass ] ------------------------------- #
+
+#endregion --- [ End: Prove It Cannot Come Back ] --------------------------------------------- #

@@ -68,6 +68,8 @@
 !/ansible/applications/*/meta/main.yml
 !/ansible/applications/*/tasks/main.yml
 !/ansible/applications/*/tasks/present_windows.yml
+!/ansible/applications/*/tasks/absent_windows.yml
+!/ansible/applications/*/tasks/clean_windows.yml
 !/ansible/applications/*/tasks/validate.yml
 !/ansible/applications/*/vars/windows.yml
 !/ansible/inventory/README.md

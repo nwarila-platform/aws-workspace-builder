@@ -1,0 +1,155 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/absent_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Removes Microsoft Openjdk 25. The mirror of present_windows.yml and the same three stages: BEGIN
+# reads the machine, PROCESS acts on what it found, END proves the product is gone.
+#
+# THE MACHINE SAYS HOW TO REMOVE ITSELF. Nothing here is pinned: the read returns the product's
+# own Add/Remove Programs registration, and the uninstall is driven from it -- the MSI
+# ProductCode where Windows Installer owns the product, and the vendor's own QuietUninstallString
+# where it does not. A hard-coded uninstall command would rot the moment a vendor changed its
+# packaging, and would be wrong for the version actually installed rather than the version this
+# role happens to pin.
+#
+# ABSENT IGNORES THE PIN. present asks "is this machine at or above the pinned version"; absent
+# asks "is this product registered at all", which is a different question about the same read.
+# A product installed at some other version is still this product, and leaving it because it did
+# not match a pin would be the opposite of removal.
+#
+# END is deliberately ungated, so a machine that never had the product proves the same state as
+# one that just gave it up.
+#
+# =========================================================================================== #
+---
+#region ------ [ Begin: What Is Actually Installed ] ------------------------------------------ #
+
+- name: 'BEGIN | Read The Installed Product From Add/Remove Programs'
+
+  # Begin The 'Begin' Block
+  block:
+
+    #region ------ [ Begin: Read The Registration ] ------------------------------------------- #
+    # The same read present performs, against the same script, so the two cannot disagree about
+    # what counts as installed. The pinned version is still passed because the script requires
+    # one; only 'count' is consulted below.
+
+    - name: 'BEGIN | Read The Installed Product From Add/Remove Programs'
+      register: '__microsoft_openjdk_25_arp__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          DisplayName: "{{ microsoft_openjdk_25_running.arp.display_name }}"
+          Version: "{{ microsoft_openjdk_25_running.installer.version }}"
+        script: "{{ lookup('ansible.builtin.file', 'Get-InstalledSoftware.ps1') }}"
+
+    #endregion --- [ Begin: Read The Registration ] ------------------------------------------- #
+
+#endregion --- [ Begin: What Is Actually Installed ] ------------------------------------------ #
+
+
+#region ------ [ Process: Give The Product Up ] ----------------------------------------------- #
+
+- name: 'PROCESS | Remove The Product By Its Own Registration'
+  vars:
+    __registered__: "{{ (__microsoft_openjdk_25_arp__.result.count | int) > 0 }}"
+    __entry__: "{{ __microsoft_openjdk_25_arp__.result.entries | default([]) | first | default({}) }}"
+    __product_id__: "{{ __entry__.product_id | default('') }}"
+    __quiet_uninstall__: "{{ __entry__.QuietUninstallString | default('') }}"
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Windows Installer Products ] ------------------------------------ #
+    # A ProductCode means Windows Installer owns the product, and msiexec can remove it without
+    # the vendor's help. The module drives it quiet and restart-suppressed, and 3010 is accepted
+    # for the same reason it is on install: it means the removal succeeded and wants a restart.
+
+    - name: 'PROCESS | Uninstall The Windows Installer Product'
+      when:
+        - __registered__ | bool
+        - __product_id__ | length > 0
+
+      ansible.windows.win_package:
+        arguments: '/norestart'
+        expected_return_code: [ 0, 3010 ]
+        product_id: "{{ __product_id__ }}"
+        state: 'absent'
+
+    #endregion --- [ Process: Windows Installer Products ] ------------------------------------ #
+
+    #region ------ [ Process: Everything Else ] ----------------------------------------------- #
+    # No ProductCode means a vendor installer that registered itself. QuietUninstallString is the
+    # command the VENDOR published for exactly this, so it is used verbatim rather than guessed
+    # at; a product that registered no quiet form is refused below rather than removed with a
+    # switch invented here, because a wrong switch on an uninstall opens a dialog nobody will
+    # ever answer on a machine with no interactive session.
+
+    - name: 'PROCESS | Run The Vendor Quiet Uninstall Command'
+      when:
+        - __registered__ | bool
+        - __product_id__ | length == 0
+        - __quiet_uninstall__ | length > 0
+
+      ansible.windows.win_shell: "{{ __quiet_uninstall__ }}"
+
+    - name: 'PROCESS | Refuse A Product That Published No Quiet Uninstall'
+      when:
+        - __registered__ | bool
+        - __product_id__ | length == 0
+        - __quiet_uninstall__ | length == 0
+
+      ansible.builtin.fail:
+        msg: >-
+          '{{ microsoft_openjdk_25_running.arp.display_name }}' is registered but carries neither a
+          Windows Installer ProductCode nor a QuietUninstallString, so there is no removal
+          command this role can run without inventing one. Add the vendor's documented silent
+          uninstall to this role before removing it from a host.
+
+    #endregion --- [ Process: Everything Else ] ----------------------------------------------- #
+
+#endregion --- [ Process: Give The Product Up ] ----------------------------------------------- #
+
+
+#region ------ [ End: Prove It Is Gone ] ------------------------------------------------------ #
+
+- name: 'END | Prove The Product Is Gone'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Re-Read The Registration ] ------------------------------------------ #
+
+    - name: 'END | Re-Read The Installed Product From Add/Remove Programs'
+      register: '__microsoft_openjdk_25_final_arp__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          DisplayName: "{{ microsoft_openjdk_25_running.arp.display_name }}"
+          Version: "{{ microsoft_openjdk_25_running.installer.version }}"
+        script: "{{ lookup('ansible.builtin.file', 'Get-InstalledSoftware.ps1') }}"
+
+    #endregion --- [ End: Re-Read The Registration ] ------------------------------------------ #
+
+    #region ------ [ End: Prove Nothing Is Registered ] --------------------------------------- #
+    # An uninstaller's exit code is its opinion; Add/Remove Programs is the machine's. A product
+    # that removed its files but left its registration is not gone as far as anything that reads
+    # ARP is concerned, which includes this fleet's own inventory.
+
+    - name: 'END | Prove No Registration Remains'
+      ansible.builtin.assert:
+        fail_msg: >-
+          '{{ microsoft_openjdk_25_running.arp.display_name }}' is still registered in Add/Remove
+          Programs after removal
+          ({{ __microsoft_openjdk_25_final_arp__.result.count }} registration(s) remain). The uninstall
+          reported success without removing the product.
+        quiet: true
+        that: [ (__microsoft_openjdk_25_final_arp__.result.count | int) == 0 ]
+
+    #endregion --- [ End: Prove Nothing Is Registered ] --------------------------------------- #
+
+#endregion --- [ End: Prove It Is Gone ] ------------------------------------------------------ #
