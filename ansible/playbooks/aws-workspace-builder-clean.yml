@@ -34,14 +34,18 @@
 #
 # =========================================================================================== #
 ---
-#region ------ [ Play: Prepare The Stand-In For Capture ] ------------------------------------- #
+#region ------ [ Play: What This Run Is, And What It Is Preparing ] ---------------------------- #
+# Read before anything is given up. The state guard belongs here because it refuses the whole run;
+# the identity is read here because the move below happens on a domain controller, which cannot
+# ask the guest what the directory calls it -- and because after this the guest gets restarted,
+# and a name read from a machine mid-restart is a name read from nothing.
 
-- name: 'PLAY | Prepare The Stand-In For Image Capture'
+- name: 'PLAY | Read What The Capture Needs To Know'
   hosts: 'workspace_servers'
   any_errors_fatal: true
 
-  #region ------ [ Pre-Tasks ] ---------------------------------------------------------------- #
-  pre_tasks:
+  #region ------ [ Tasks ] -------------------------------------------------------------------- #
+  tasks:
 
     # EXTRA VARS OUTRANK EVERYTHING, INCLUDING THE STATE EACH ROLE BELOW ASKS FOR. The roles here
     # request 'clean' as a role parameter, and a '-e state=present' copied from the build
@@ -74,34 +78,10 @@
           $Ansible.Changed = $False
           $Ansible.Result = @{ netbios = [System.String]$env:COMPUTERNAME }
 
-  #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
 
-  #region ------ [ Roles ] -------------------------------------------------------------------- #
-  roles:
+  #endregion --- [ Tasks ] -------------------------------------------------------------------- #
 
-    #region ------ [ Roles: Splunk Universal Forwarder ] -------------------------------------- #
-    # The forwarder must not carry a per-instance identity into the image. Its present state
-    # avoids creating one (LAUNCHSPLUNK=0), but install-time properties only apply AT INSTALL --
-    # a host that already had the forwarder keeps whatever it was installed with -- so the
-    # identity is removed here, where the state of the machine is what is checked rather than
-    # the intent of an install that may never have run.
-    - role: 'splunk_universalforwarder'
-      vars:
-        state: 'clean'
-    #endregion --- [ Roles: Splunk Universal Forwarder ] -------------------------------------- #
-
-    #region ------ [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
-    # "Amazon SSM Agent must be disabled -- The Create Image process requires the Amazon SSM
-    # Agent service to be disabled." The agent stays installed and ships with the image; what
-    # must not survive capture is a running one, whose registration is instance-specific.
-    - role: 'amazon_ssm_agent'
-      vars:
-        state: 'clean'
-    #endregion --- [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
-
-  #endregion --- [ Roles ] -------------------------------------------------------------------- #
-
-#endregion --- [ Play: Prepare The Stand-In For Capture ] ------------------------------------- #
+#endregion --- [ Play: What This Run Is, And What It Is Preparing ] --------------------------- #
 
 #region ------ [ Play: Move The Machine Out Of Reach Of The Build Policy ] -------------------- #
 # THE LAST THING DONE BEFORE CAPTURE, AND IT HAPPENS IN THE DIRECTORY. Everything above gives up
@@ -181,6 +161,9 @@
     # own sake -- the Image Checker refuses a capture with a reboot pending, and this is the last
     # thing that would have caused one.
     - name: 'CAPTURE | Reboot So The Guest Reads Its New Placement'
+      when: >-
+        hostvars[groups['domain_controllers'] | first]['__capture_move__'].result.moved
+        | default(false) | bool
 
       ansible.windows.win_reboot:
         boot_time_command: >-
@@ -210,6 +193,10 @@
     # What is waited on instead is the locator, which only answers once the machine can find a
     # controller for its own domain and talk to it as itself.
     - name: 'CAPTURE | Wait Until The Guest Can Actually Use The Directory'
+      when: >-
+        hostvars[groups['domain_controllers'] | first]['__capture_move__'].result.moved
+        | default(false) | bool
+
       register: '__capture_locator__'
       retries: 30
       delay: 10
@@ -230,6 +217,9 @@
 
     - name: 'CAPTURE | Refresh Policy Now That The Object Has Moved'
       changed_when: true
+      when: >-
+        hostvars[groups['domain_controllers'] | first]['__capture_move__'].result.moved
+        | default(false) | bool
 
       ansible.windows.win_shell: 'gpupdate /force /wait:120'
 
@@ -280,3 +270,45 @@
   #endregion --- [ Tasks ] -------------------------------------------------------------------- #
 
 #endregion --- [ Play: Prove The Build Policy No Longer Applies ] ----------------------------- #
+
+#region ------ [ Play: Give Up What Must Not Be Captured ] ------------------------------------ #
+# LAST, AND THAT ORDER IS THE WHOLE POINT. Anything that starts itself at boot comes back after a
+# restart: the forwarder is installed with an automatic start type, so a reboot between its clean
+# state and the capture restarts it and it writes a fresh per-instance identity -- which is the
+# one thing its clean state exists to prevent. Running these states after the reboot above means
+# nothing gets the chance to undo them.
+#
+# It was in the wrong place first, and the machine said so: a second run found the forwarder
+# running again with a new instance.cfg, because the reboot that re-scopes Group Policy had come
+# after these states rather than before them.
+
+- name: 'PLAY | Prepare The Stand-In For Image Capture'
+  hosts: 'workspace_servers'
+  any_errors_fatal: true
+
+  #region ------ [ Roles ] -------------------------------------------------------------------- #
+  roles:
+
+    #region ------ [ Roles: Splunk Universal Forwarder ] -------------------------------------- #
+    # The forwarder must not carry a per-instance identity into the image. Its present state
+    # avoids creating one (LAUNCHSPLUNK=0), but install-time properties only apply AT INSTALL --
+    # a host that already had the forwarder keeps whatever it was installed with -- so the
+    # identity is removed here, where the state of the machine is what is checked rather than
+    # the intent of an install that may never have run.
+    - role: 'splunk_universalforwarder'
+      vars:
+        state: 'clean'
+    #endregion --- [ Roles: Splunk Universal Forwarder ] -------------------------------------- #
+
+    #region ------ [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
+    # "Amazon SSM Agent must be disabled -- The Create Image process requires the Amazon SSM
+    # Agent service to be disabled." The agent stays installed and ships with the image; what
+    # must not survive capture is a running one, whose registration is instance-specific.
+    - role: 'amazon_ssm_agent'
+      vars:
+        state: 'clean'
+    #endregion --- [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
+
+  #endregion --- [ Roles ] -------------------------------------------------------------------- #
+
+#endregion --- [ Play: Give Up What Must Not Be Captured ] ------------------------------------ #
