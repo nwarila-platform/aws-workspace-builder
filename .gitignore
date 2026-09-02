@@ -83,6 +83,7 @@
 !/ansible/inventory/domain_controllers.yml
 !/ansible/playbooks/aws-workspace-builder-aws.yml
 !/ansible/playbooks/aws-workspace-builder-clean.yml
+!/ansible/playbooks/aws-workspace-builder-ad-config-local.yml
 
 # --- [ allowed: scripts ] ------------------------------------------------------------------- #
 !/scripts/Get-InstalledSoftware.pester.ps1

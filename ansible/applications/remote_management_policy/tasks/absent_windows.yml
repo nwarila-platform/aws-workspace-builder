@@ -1,0 +1,205 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/absent_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Removes what this role created in the directory: the policy, its link, and the two
+# organizational units. This is the deconfigure half of a one-time environment role -- the
+# counterpart to a run that stood the environment up, not something a build ever does.
+#
+# IT REMOVES ONLY WHAT IT CAN PROVE IT OWNS. The policy is resolved by display name, and a name is
+# not proof of authorship: a directory team could plausibly have a policy of the same name, and
+# deleting theirs would be far worse than leaving ours. So the comment this role stamps at
+# creation is checked first, and a policy that does not carry it is refused by name rather than
+# deleted. That refusal is the correct outcome, not a failure to handle.
+#
+# THE ORGANIZATIONAL UNITS COME OUT ONLY IF THEY ARE EMPTY. An OU holding computer objects is
+# holding somebody's machines, and this role has no way to know whose. Emptying it is a decision
+# with consequences beyond this repository, so it is refused and named instead. They are also
+# protected from accidental deletion at creation, which has to be lifted before the delete --
+# deliberately, as its own step, because that protection exists precisely to make this moment
+# require intent.
+#
+# =========================================================================================== #
+---
+#region ------ [ Begin: What Is Actually There ] ---------------------------------------------- #
+
+- name: 'BEGIN | Read The Policy And The Units This Role Created'
+  register: '__remote_management_policy_state__'
+
+  ansible.windows.win_powershell:
+    depth: 4
+    error_action: 'stop'
+    parameters:
+      CaptureOu: "{{ remote_management_policy_running.capture_ou }}"
+      Marker: "{{ remote_management_policy_running.ownership_marker }}"
+      Name: "{{ remote_management_policy_running.name }}"
+      TargetOu: "{{ remote_management_policy_running.target_ou }}"
+    script: |
+      [CmdletBinding()]
+      Param (
+        [System.String]$Name,
+        [System.String]$Marker,
+        [System.String]$TargetOu,
+        [System.String]$CaptureOu
+      )
+      $Ansible.Changed = $False
+
+      # The policy, and whether this role is entitled to remove it.
+      $Candidates = @(Get-GPO -All | Where-Object { $PSItem.DisplayName -eq $Name })
+      $Owned = $False
+      $Present = $Candidates.Count -gt 0
+      $Comment = ''
+      If ($Candidates.Count -eq 1) {
+        $Comment = [System.String]$Candidates[0].Description
+        $Owned = $Comment -like ('*{0}*' -f $Marker)
+      }
+
+      # An OU that still holds anything is somebody's, and emptying it is not this role's call.
+      Function Get-OuOccupancy {
+        Param ([System.String]$Path)
+        $Exists = $True
+        Try {
+          $Null = Get-ADOrganizationalUnit -Identity:$Path
+        } Catch {
+          $Exists = $False
+        }
+        If (-not $Exists) {
+          Return @{ exists = $False; occupants = 0 }
+        }
+        $Children = @(Get-ADObject -SearchBase:$Path -SearchScope:'OneLevel' -Filter *)
+        Return @{ exists = $True; occupants = $Children.Count }
+      }
+
+      $Ansible.Result = @{
+        ambiguous  = ($Candidates.Count -gt 1)
+        capture_ou = (Get-OuOccupancy -Path:$CaptureOu)
+        owned      = $Owned
+        present    = $Present
+        target_ou  = (Get-OuOccupancy -Path:$TargetOu)
+      }
+
+#endregion --- [ Begin: What Is Actually There ] ---------------------------------------------- #
+
+
+#region ------ [ Process: Give The Directory Back ] ------------------------------------------- #
+
+- name: 'PROCESS | Remove The Policy And The Units'
+  vars:
+    __state__: "{{ __remote_management_policy_state__.result }}"
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Refuse What Is Not Ours ] --------------------------------------- #
+
+    - name: 'PROCESS | Refuse A Policy This Role Did Not Create'
+      when:
+        - __state__.present | bool
+        - not (__state__.owned | bool)
+
+      ansible.builtin.fail:
+        msg: >-
+          A policy named '{{ remote_management_policy_running.name }}' exists but does not carry
+          this role's ownership marker
+          ('{{ remote_management_policy_running.ownership_marker }}'), or the name resolves to
+          {{ 'more than one policy' if __state__.ambiguous | bool else 'one this role did not create' }}.
+          Refusing to delete it: a shared display name is not proof of authorship, and removing a
+          directory team's policy would be far worse than leaving this one behind. Remove it by
+          hand if it really is ours.
+
+    #endregion --- [ Process: Refuse What Is Not Ours ] --------------------------------------- #
+
+    #region ------ [ Process: Remove The Policy ] --------------------------------------------- #
+    # Deleting the policy takes its links with it, so the link is not unlinked separately.
+
+    - name: 'PROCESS | Remove The Remote Management Policy'
+      when:
+        - __state__.present | bool
+        - __state__.owned | bool
+
+      ansible.windows.win_powershell:
+        error_action: 'stop'
+        parameters:
+          Name: "{{ remote_management_policy_running.name }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$Name)
+          Remove-GPO -Name:$Name -ErrorAction:'Stop'
+          $Ansible.Changed = $True
+          $Ansible.Result = @{ removed = $Name }
+
+    #endregion --- [ Process: Remove The Policy ] --------------------------------------------- #
+
+    #region ------ [ Process: Remove The Units, If They Are Empty ] --------------------------- #
+    # Refused rather than emptied. An OU with objects in it is holding machines this role cannot
+    # account for, and the protection flag set at creation is lifted as its own step so that
+    # deleting a unit always takes a deliberate act.
+
+    - name: 'PROCESS | Refuse To Remove An Organizational Unit That Still Holds Objects'
+      loop:
+        - { name: 'build', ou: "{{ remote_management_policy_running.target_ou }}", state: "{{ __state__.target_ou }}" }
+        - { name: 'capture', ou: "{{ remote_management_policy_running.capture_ou }}", state: "{{ __state__.capture_ou }}" }
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.state.exists | bool
+        - (item.state.occupants | int) > 0
+
+      ansible.builtin.fail:
+        msg: >-
+          The {{ item.name }} OU {{ item.ou }} still holds
+          {{ item.state.occupants }} object(s). Refusing to remove it: those are somebody's
+          machines, and this role cannot tell whose. Move or delete them first, then re-run.
+
+    - name: 'PROCESS | Remove The Organizational Units This Role Created'
+      loop:
+        - { name: 'capture', ou: "{{ remote_management_policy_running.capture_ou }}", state: "{{ __state__.capture_ou }}" }
+        - { name: 'build', ou: "{{ remote_management_policy_running.target_ou }}", state: "{{ __state__.target_ou }}" }
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - item.state.exists | bool
+        - (item.state.occupants | int) == 0
+
+      microsoft.ad.ou:
+        identity: "{{ item.ou }}"
+        protect_from_deletion: false
+        state: 'absent'
+
+    #endregion --- [ Process: Remove The Units, If They Are Empty ] --------------------------- #
+
+#endregion --- [ Process: Give The Directory Back ] ------------------------------------------- #
+
+
+#region ------ [ End: Prove The Directory Is Back ] ------------------------------------------- #
+
+- name: 'END | Prove Nothing This Role Created Remains'
+  register: '__remote_management_policy_final__'
+  failed_when: not (__remote_management_policy_final__.result.clear | default(false) | bool)
+
+  ansible.windows.win_powershell:
+    depth: 3
+    error_action: 'stop'
+    parameters:
+      CaptureOu: "{{ remote_management_policy_running.capture_ou }}"
+      Name: "{{ remote_management_policy_running.name }}"
+      TargetOu: "{{ remote_management_policy_running.target_ou }}"
+    script: |
+      [CmdletBinding()]
+      Param ([System.String]$Name, [System.String]$TargetOu, [System.String]$CaptureOu)
+      $Remaining = [System.Collections.Generic.List[System.String]]::new()
+      If (@(Get-GPO -All | Where-Object { $PSItem.DisplayName -eq $Name }).Count -gt 0) {
+        $Remaining.Add(('policy "{0}"' -f $Name))
+      }
+      ForEach ($Ou In @($TargetOu, $CaptureOu)) {
+        Try {
+          $Null = Get-ADOrganizationalUnit -Identity:$Ou
+          $Remaining.Add(('organizational unit {0}' -f $Ou))
+        } Catch {
+          # Absent is the state being proven, so a lookup that fails is the success case.
+        }
+      }
+      $Ansible.Changed = $False
+      $Ansible.Result = @{ clear = ($Remaining.Count -eq 0); remaining = $Remaining.ToArray() }
+
+#endregion --- [ End: Prove The Directory Is Back ] ------------------------------------------- #

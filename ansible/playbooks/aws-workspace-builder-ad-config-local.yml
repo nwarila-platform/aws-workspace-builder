@@ -1,0 +1,101 @@
+# =========================================================================================== #
+# File: 'ansible/playbooks/aws-workspace-builder-ad-config-local.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Stands up, and takes down, the directory this deployment builds into: the organizational unit a
+# stand-in is born in, the unit it is moved to before capture, and the Group Policy that opens a
+# machine in the first one to its operator. Runs against a DOMAIN CONTROLLER, never against a
+# guest, so it addresses the static inventory beside the dynamic one -- a domain controller is
+# standing infrastructure, and an address written down for it stays true.
+#
+# THIS IS NOT PART OF THE BUILD, AND THAT IS THE POINT. What it creates is environment: it changes
+# once, when the environment is first stood up or deliberately changed, and then not again for
+# months of image builds. Running it on every build would mean every build carried the rights to
+# create organizational units and rewrite Group Policy in a production directory -- rights the
+# everyday path has no business holding -- and would re-assert a security template against a
+# policy object on a schedule nobody asked for. The build playbook asserts this environment
+# exists and stops if it does not; it does not create it.
+#
+# It also cannot run in CI. The runner has no route to a domain controller, which is the same
+# reason the converge itself is an operator's job. The key that reaches the controller is supplied
+# per run and is never stored in this repository.
+#
+# TWO DIRECTIONS, BOTH DELIBERATE.
+#
+#   -e state=present   create the units, converge the policy, link it. The default.
+#   -e state=absent    give the directory back: remove the policy this role stamped as its own,
+#                      then the units, but only if they are empty and only after lifting the
+#                      protection set at creation. A policy without this role's ownership marker
+#                      is refused rather than deleted -- a shared display name is not proof of
+#                      authorship.
+#
+# HOW TO RUN IT
+#
+#   COMPOSE_PLAYBOOK=aws-workspace-builder-ad-config-local.yml scripts/compose-and-run.sh \
+#     -i "$PWD/ansible/inventory/domain_controllers.yml" \
+#     --private-key ~/.ssh/<key> \
+#     -e aws_account_id=<account>
+#
+# The dynamic EC2 inventory is not needed and not consulted: nothing here touches a guest.
+#
+# =========================================================================================== #
+---
+#region ------ [ Play: The Directory This Deployment Builds Into ] ---------------------------- #
+
+- name: 'PLAY | Configure The Directory (domain controller, manual)'
+  hosts: 'domain_controllers'
+  any_errors_fatal: true
+  run_once: true
+
+  #region ------ [ Pre-Tasks ] ---------------------------------------------------------------- #
+  pre_tasks:
+
+    # The facts this play acts on live in the static inventory, so a run that reached here without
+    # them would create units with empty names. Checked before anything is written.
+    - name: 'INVENTORY | Require The Directory Facts This Play Writes'
+      ansible.builtin.assert:
+        fail_msg: >-
+          This play writes into the directory and needs to be told where. workspace_computer_ou
+          and workspace_capture_ou must both be set, must be distinct, and must be
+          distinguished names. They live in ansible/inventory/domain_controllers.yml; add that
+          inventory to the invocation.
+        quiet: true
+        that:
+          - workspace_computer_ou | default('') is match('^OU=[^,]+(,(OU|DC)=[^,]+)+$')
+          - workspace_capture_ou | default('') is match('^OU=[^,]+(,(OU|DC)=[^,]+)+$')
+          - workspace_capture_ou != workspace_computer_ou
+
+    # The policy admits ONE source address to the guest's WinRM listener, and on a present run
+    # that address has to be the operator who will converge from it. Resolved the same way the
+    # build resolves it, from the service the deployment's security group is also keyed on.
+    - name: 'INVENTORY | Resolve The Operator Address The Policy Will Admit'
+      changed_when: false
+      delegate_to: 'localhost'
+      register: '__operator_address_probe__'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+
+      ansible.builtin.uri:
+        return_content: true
+        url: 'https://checkip.amazonaws.com'
+
+  #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
+
+  #region ------ [ Roles ] -------------------------------------------------------------------- #
+  roles:
+
+    #region ------ [ Roles: Remote Management Policy ] ---------------------------------------- #
+    # The same role the build used to invoke on every run. It owns both organizational units and
+    # the policy, so it owns their removal too -- which is why 'absent' here is a real reversal
+    # rather than the catalogue's generic uninstaller.
+    - role: 'remote_management_policy'
+      vars:
+        remote_management_policy:
+          target_ou: "{{ workspace_computer_ou }}"
+          capture_ou: "{{ workspace_capture_ou }}"
+          operator_address: >-
+            {{ (__operator_address_probe__.content | default('') | trim) | default(omit, true) }}
+    #endregion --- [ Roles: Remote Management Policy ] ---------------------------------------- #
+
+  #endregion --- [ Roles ] -------------------------------------------------------------------- #
+
+#endregion --- [ Play: The Directory This Deployment Builds Into ] ---------------------------- #

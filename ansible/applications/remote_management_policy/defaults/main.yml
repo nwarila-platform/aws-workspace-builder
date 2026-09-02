@@ -53,6 +53,12 @@ remote_management_policy_defaults:
   # one design and a capture OU that does not exist is discovered at the worst possible moment.
   capture_ou: ''
 
+  # WHAT MAKES A POLICY OURS. A display name is not proof of authorship -- a directory team could
+  # plausibly have one of the same name -- so the comment stamped on the policy at creation is
+  # what the absent state checks before it deletes anything. Removing somebody else's policy
+  # would be far worse than leaving ours behind, so a policy without this marker is refused.
+  ownership_marker: 'Managed by aws-workspace-builder'
+
   # The IPv4 address the operator's converge arrives from: the only remote address the firewall
   # rule admits to TCP 5985. Empty on purpose, for the same reason: the playbook resolves it per
   # run, and a policy written for a stale address opens the host to nobody who can use it.

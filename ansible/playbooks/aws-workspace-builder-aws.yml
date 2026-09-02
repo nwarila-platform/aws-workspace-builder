@@ -208,7 +208,7 @@
 # directory changes nothing. The one per-run value is the operator address the firewall rule
 # admits, resolved in play 1 from the seat the converge is running in.
 
-- name: 'PLAY | Prepare The Directory The Stand-In Is Born Into'
+- name: 'PLAY | Require The Directory The Stand-In Is Born Into'
   hosts: 'domain_controllers'
   any_errors_fatal: true
 
@@ -230,26 +230,67 @@
           $Ansible.Changed = $False
           $Ansible.Result = @{ utc = (Get-Date).ToUniversalTime().ToString('o') }
 
+    # THE DIRECTORY IS A PRECONDITION, NOT SOMETHING A BUILD MAKES. The units and the policy are
+    # environment: they change when the environment is deliberately changed, and then not again
+    # for months of image builds. Creating them from here would mean every build held the rights
+    # to make organizational units and rewrite Group Policy in a production directory, and would
+    # re-assert a security template on a schedule nobody asked for. So the build reads, and stops
+    # if what it needs is not there. aws-workspace-builder-ad-config-local.yml is what puts it
+    # there, run once by an operator.
+    - name: 'DIRECTORY | Read The Environment This Build Requires'
+      register: '__directory_state__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          CaptureOu: "{{ workspace_capture_ou }}"
+          Name: "{{ workspace_policy_name | default('WorkSpaces Remote Management') }}"
+          TargetOu: "{{ workspace_computer_ou }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$Name, [System.String]$TargetOu, [System.String]$CaptureOu)
+          Function Test-Ou {
+            Param ([System.String]$Path)
+            Try { $Null = Get-ADOrganizationalUnit -Identity:$Path; Return $True } Catch { Return $False }
+          }
+          $Policy = @(Get-GPO -All | Where-Object { $PSItem.DisplayName -eq $Name })
+          $Linked = $False
+          If ($Policy.Count -eq 1) {
+            $Inheritance = Get-GPInheritance -Target:$TargetOu -ErrorAction:'SilentlyContinue'
+            If ($Null -ne $Inheritance) {
+              $Linked = @(
+                $Inheritance.GpoLinks | Where-Object { [System.String]$PSItem.GpoId -eq [System.String]$Policy[0].Id }
+              ).Count -gt 0
+            }
+          }
+          $Ansible.Changed = $False
+          $Ansible.Result = @{
+            build_ou   = (Test-Ou -Path:$TargetOu)
+            capture_ou = (Test-Ou -Path:$CaptureOu)
+            policy      = ($Policy.Count -eq 1)
+            linked      = $Linked
+          }
+
+    - name: 'DIRECTORY | Require The Environment Before Anything Is Built'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The directory this build needs is not in place -- build OU
+          {{ __directory_state__.result.build_ou }}, capture OU
+          {{ __directory_state__.result.capture_ou }}, policy
+          {{ __directory_state__.result.policy }}, policy linked to the build OU
+          {{ __directory_state__.result.linked }} (all four must be true). This build does not
+          create them, deliberately: run aws-workspace-builder-ad-config-local.yml once against
+          the domain controller, then re-run this.
+        quiet: true
+        that:
+          - __directory_state__.result.build_ou | bool
+          - __directory_state__.result.capture_ou | bool
+          - __directory_state__.result.policy | bool
+          - __directory_state__.result.linked | bool
+
   #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
 
-  #region ------ [ Roles ] -------------------------------------------------------------------- #
-  roles:
-
-    #region ------ [ Roles: Remote Management Policy ] ---------------------------------------- #
-    # target_ou is the ONE inventory value the join in play 3 receives too, so the OU the guest is
-    # created in and the OU the policy is linked to cannot drift apart. The role creates the leaf
-    # OU when absent and expects its parent -- which carries the join delegation and the LAPS
-    # self-write rights a computer object needs -- to be the directory's own.
-    - role: 'remote_management_policy'
-      when: (state | default('present') | string | lower | trim) != 'absent'
-      vars:
-        remote_management_policy:
-          target_ou: "{{ workspace_computer_ou }}"
-          capture_ou: "{{ workspace_capture_ou }}"
-          operator_address: "{{ hostvars['localhost']['__operator_address__'] }}"
-    #endregion --- [ Roles: Remote Management Policy ] ---------------------------------------- #
-
-  #endregion --- [ Roles ] -------------------------------------------------------------------- #
 
 #endregion --- [ Play: Prepare The Directory ] ------------------------------------------------ #
 
