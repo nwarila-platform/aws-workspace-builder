@@ -4,6 +4,14 @@
 #
 # STUB for catalog product 'Amazon-Web-Services_aws-cfn-bootstrap' (fleet pin 2.0.34).
 #
+# BLOCKED. NO PUBLIC ARTIFACT EXISTS FOR THE VERSION THIS IMAGE ALREADY CARRIES. The AMI ships
+# aws-cfn-bootstrap 2.0.40, but the vendor publishes only 1.4.36 at
+# cloudformation-examples/aws-cfn-bootstrap-win64-latest.msi -- OLDER than what is installed.
+# Every py3/2.x path tested (aws-cfn-bootstrap-py3-win64-latest.msi, -py3-latest.msi,
+# -2.0-win64.msi) returns an S3 error document rather than a package. Staging 1.4.36 would
+# pin the image BELOW the AMI and make the role a permanent no-op that lies about what the
+# image carries, so this stays a stub until the vendor publishes a fetchable 2.x artifact.
+#
 # The one honest action of an unfinished role is to refuse loudly: this role is not yet
 # wired into the playbook, and wiring it in early fails here, by name, rather than half
 # installing something. Finish it from the google_chrome pattern (BEGIN reads Add/Remove
@@ -17,5 +25,6 @@
   ansible.builtin.fail:
     msg: >-
       The 'aws_cfn_bootstrap' role is a stub reserving catalog product 'Amazon-Web-Services_aws-cfn-bootstrap' at fleet pin 2.0.34.
-      Finish it from the google_chrome pattern and stage its artifact in the application
-      repository before wiring it into the play. See README.md.
+      It is BLOCKED rather than merely unfinished: the vendor publishes no fetchable 2.x artifact and the only public MSI (1.4.36) is older
+      than the 2.0.40 the AMI already carries.
+      See the notes at the top of this file before wiring it into the play.

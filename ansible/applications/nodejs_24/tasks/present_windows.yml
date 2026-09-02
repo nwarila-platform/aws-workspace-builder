@@ -4,6 +4,14 @@
 #
 # STUB for catalog product 'Node.js-Foundation_Node.js-24' (fleet pin 24.20.0).
 #
+# BLOCKED. ONE NODE PER IMAGE. Every Node.js MSI registers the SAME Add/Remove Programs display name,
+# 'Node.js', regardless of version, and they share an upgrade code -- so a second version does
+# not sit beside the first, it REPLACES it, and a read by display name cannot tell which is
+# installed. The image carries nodejs_22, which is proven and wired into the play. Installing
+# this one alongside it would silently swap the image's Node and make both roles unreadable.
+# Carrying several versions needs a per-version install location and a version manager, which
+# is a product decision this repository has not been given.
+#
 # The one honest action of an unfinished role is to refuse loudly: this role is not yet
 # wired into the playbook, and wiring it in early fails here, by name, rather than half
 # installing something. Finish it from the google_chrome pattern (BEGIN reads Add/Remove
@@ -17,5 +25,6 @@
   ansible.builtin.fail:
     msg: >-
       The 'nodejs_24' role is a stub reserving catalog product 'Node.js-Foundation_Node.js-24' at fleet pin 24.20.0.
-      Finish it from the google_chrome pattern and stage its artifact in the application
-      repository before wiring it into the play. See README.md.
+      It is BLOCKED rather than merely unfinished: every Node MSI registers as 'Node.js' and shares an upgrade code, so it would REPLACE the
+      image's nodejs_22 rather than sit beside it.
+      See the notes at the top of this file before wiring it into the play.
