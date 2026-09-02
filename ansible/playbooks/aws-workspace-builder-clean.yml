@@ -308,6 +308,18 @@
       vars:
         state: 'clean'
     #endregion --- [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
+    #region ------ [ Roles: Workspace Capture Readiness ] ------------------------------------- #
+    # LAST, because it is the verdict. Everything above gives something up; this runs the
+    # capture-only remediation and then asks whether the machine would actually be accepted --
+    # our own pre-checks everywhere, and AWS's own validation wherever its agent provides it.
+    - role: 'workspace_capture_readiness'
+      vars:
+        state: 'clean'
+        workspace_capture_readiness:
+          checker:
+            bucket: "{{ aws_account_id }}-apprepo"
+    #endregion --- [ Roles: Workspace Capture Readiness ] ------------------------------------- #
+
 
   #endregion --- [ Roles ] -------------------------------------------------------------------- #
 

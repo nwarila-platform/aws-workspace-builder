@@ -1,0 +1,308 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/clean_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# The last thing done before a WorkSpace is captured: the requirements that are only true at the
+# moment of capture, then AWS's own validation, then a refusal if anything would fail.
+#
+# AWS'S CHECKER IS THE AUTHORITY, AND IT IS NOT THIS FILE. ImageChecker.exe is a GUI front-end;
+# the tests it runs live in imagePrepValidation.ps1, which ships with the WORKSPACES AGENT at
+# C:\Program Files\Amazon\WorkspacesConfig\scripts\. On a real WorkSpace that script is present
+# and is invoked directly here -- no dialog, no operator. On the EC2 stand-in it does not exist,
+# because the stand-in carries none of the WorkSpaces agents, and no amount of staging the
+# front-end changes that.
+#
+# So this file does two different things and is careful about which is which:
+#
+#   OUR PRE-CHECKS run everywhere, including the stand-in. They cover the same ground the Checker
+#   covers, so a machine that would fail says so early and cheaply -- on a stand-in we can destroy
+#   rather than on a WorkSpace mid-capture. Passing them is NOT a pass from AWS.
+#
+#   AWS'S VALIDATION runs only where its script exists. Where it does, its verdict is the one that
+#   counts and a failure here fails the run. Where it does not, that is reported plainly rather
+#   than skipped in silence, because "the checker did not run" and "the checker passed" must never
+#   look alike in a log somebody reads later.
+#
+# WHAT IS REFUSED RATHER THAN REPAIRED. Extra volumes, extra user profiles and services running as
+# domain accounts are all somebody's data or somebody's decision. This role names them and stops.
+# Staged AppX packages are removed, because a half-staged package is Sysprep's problem and nobody
+# else's.
+#
+# =========================================================================================== #
+---
+#region ------ [ Process: The Capture-Only Remediation ] -------------------------------------- #
+
+- name: 'PROCESS | Give Up What Only A Capture Needs Given Up'
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Staged AppX Packages ] ------------------------------------------ #
+    # A package staged for a user who no longer exists breaks Sysprep, and Sysprep is what turns
+    # this machine into an image. Removing them is safe in a way the other findings are not: a
+    # staged package is not installed for anybody.
+
+    - name: 'PROCESS | Remove Packages Left Staged For Absent Users'
+      register: '__capture_appx__'
+      changed_when: '__capture_appx__.result.removed | default(0) | int > 0'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        script: |
+          $Removed = 0
+          $Names = [System.Collections.Generic.List[System.String]]::new()
+          ForEach ($Package In @(Get-AppxPackage -AllUsers -ErrorAction:'SilentlyContinue')) {
+            $Staged = @($Package.PackageUserInformation | Where-Object {
+              [System.String]$PSItem.InstallState -eq 'Staged'
+            })
+            If ($Staged.Count -gt 0 -and $Staged.Count -eq @($Package.PackageUserInformation).Count) {
+              Try {
+                Remove-AppxPackage -Package:$Package.PackageFullName -AllUsers -ErrorAction:'Stop'
+                $Names.Add([System.String]$Package.Name)
+                $Removed++
+              } Catch {
+                # A package Windows refuses to remove is reported by the audit below rather than
+                # fought with here: forcing it is how a machine ends up unbootable.
+              }
+            }
+          }
+          $Ansible.Changed = ($Removed -gt 0)
+          $Ansible.Result = @{ removed = $Removed; packages = $Names.ToArray() }
+
+    #endregion --- [ Process: Staged AppX Packages ] ------------------------------------------ #
+
+    #region ------ [ Process: Stage AWS's Checker ] ------------------------------------------- #
+    # Put the front-end where AWS documents it, so an operator who wants to look at the result
+    # interactively finds it in the expected place. The validation this role runs does not use it.
+
+    - name: 'PROCESS | Ensure The Directory AWS Keeps Its Tooling In'
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ workspace_capture_readiness_running.checker.directory }}"
+        state: 'directory'
+
+    - name: 'PROCESS | Fetch The Image Checker To The Controller'
+      delegate_to: 'localhost'
+      register: '__capture_checker_stage__'
+      vars:
+        ansible_connection: 'local'
+        ansible_shell_type: 'sh'
+
+      ansible.builtin.tempfile:
+        path: '/tmp'
+        prefix: 'workspaces-imagechecker-'
+        state: 'directory'
+        suffix: ''
+
+    - name: 'PROCESS | Read The Image Checker From The Application Repository'
+      delegate_to: 'localhost'
+      vars:
+        ansible_connection: 'local'
+        ansible_shell_type: 'sh'
+
+      amazon.aws.s3_object:
+        bucket: "{{ workspace_capture_readiness_running.checker.bucket }}"
+        dest: "{{ __capture_checker_stage__.path }}/ImageChecker.exe"
+        ignore_nonexistent_bucket: true
+        mode: 'get'
+        object: "{{ workspace_capture_readiness_running.checker.object }}"
+        overwrite: 'different'
+        sig_v4: true
+        validate_certs: true
+
+    - name: 'PROCESS | Place The Image Checker Where AWS Documents It'
+
+      ansible.windows.win_copy:
+        backup: false
+        decrypt: true
+        dest: "{{ workspace_capture_readiness_running.checker.directory }}\\ImageChecker.exe"
+        force: true
+        local_follow: true
+        remote_src: false
+        src: "{{ __capture_checker_stage__.path }}/ImageChecker.exe"
+
+    #endregion --- [ Process: Stage AWS's Checker ] ------------------------------------------- #
+
+  # Begin the 'Always' block
+  always:
+
+    #region ------ [ Always: Remove The Controller Staging Directory ] ------------------------ #
+
+    - name: 'PROCESS | Remove The Controller Staging Directory'
+      changed_when: false
+      delegate_to: 'localhost'
+      vars:
+        ansible_connection: 'local'
+        ansible_shell_type: 'sh'
+      when: __capture_checker_stage__ is defined and not (__capture_checker_stage__ is skipped)
+
+      ansible.builtin.file:
+        path: "{{ __capture_checker_stage__.path }}"
+        state: 'absent'
+
+    #endregion --- [ Always: Remove The Controller Staging Directory ] ------------------------ #
+
+#endregion --- [ Process: The Capture-Only Remediation ] -------------------------------------- #
+
+
+#region ------ [ End: Would AWS Accept This Machine ] ----------------------------------------- #
+
+- name: 'END | Would AWS Accept This Machine'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Our Own Pre-Checks ] ------------------------------------------------ #
+    # The same ground AWS's Checker covers, run everywhere so a machine that would fail says so
+    # early. A pass here is not a pass from AWS, and the report below never claims it is.
+
+    - name: 'END | Read Every Capture Requirement This Role Can Check'
+      register: '__capture_audit__'
+
+      ansible.windows.win_powershell:
+        depth: 4
+        error_action: 'stop'
+        parameters:
+          AllowedDrives: "{{ workspace_capture_readiness_running.allowed_drives }}"
+          AllowedProfiles: "{{ workspace_capture_readiness_running.allowed_profiles }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String[]]$AllowedDrives, [System.String[]]$AllowedProfiles)
+          $Failures = [System.Collections.Generic.List[System.String]]::new()
+
+          # Only C and D may exist. Refused rather than repaired: a volume is somebody's data.
+          ForEach ($Volume In @(Get-Volume -ErrorAction:'SilentlyContinue' |
+                                Where-Object { $PSItem.DriveLetter })) {
+            If ($AllowedDrives -notcontains [System.String]$Volume.DriveLetter) {
+              $Failures.Add(('drive {0}: exists; capture allows only {1}' -f
+                             $Volume.DriveLetter, ($AllowedDrives -join ', ')))
+            }
+          }
+
+          # No service may run as a domain account. Local System, Local Service and Network
+          # Service are fine; a name carrying a domain is not.
+          ForEach ($Service In @(Get-CimInstance -ClassName:'Win32_Service' -ErrorAction:'SilentlyContinue')) {
+            $Account = [System.String]$Service.StartName
+            If ($Account -and $Account -match '\\' -and
+                $Account -notmatch '^(NT AUTHORITY|NT SERVICE|BUILTIN|\.)\\' -and
+                $Account -notmatch '^(LocalSystem|LocalService|NetworkService)$') {
+              $Failures.Add(('service {0} runs as {1}' -f $Service.Name, $Account))
+            }
+          }
+
+          # Nothing may be pending a reboot -- capture refuses one, and a half-applied update is
+          # exactly what a captured image should not carry.
+          $PendingKeys = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+          )
+          ForEach ($Key In $PendingKeys) {
+            If (Test-Path -LiteralPath:$Key) { $Failures.Add(('a reboot is pending ({0})' -f $Key)) }
+          }
+          $Session = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+          If (Test-Path -LiteralPath:$Session) {
+            $Item = Get-ItemProperty -LiteralPath:$Session -ErrorAction:'SilentlyContinue'
+            If ($Null -ne $Item -and $Null -ne $Item.PSObject.Properties['PendingFileRenameOperations']) {
+              $Failures.Add('a reboot is pending (files are queued for rename)')
+            }
+          }
+
+          # Only the intended profiles. Refused rather than deleted: a profile is somebody's data.
+          ForEach ($Profile In @(Get-CimInstance -ClassName:'Win32_UserProfile' -ErrorAction:'SilentlyContinue' |
+                                 Where-Object { -not $PSItem.Special })) {
+            $Leaf = Split-Path -Leaf ([System.String]$Profile.LocalPath)
+            If ($AllowedProfiles -notcontains $Leaf) {
+              $Failures.Add(('user profile {0} is present' -f $Leaf))
+            }
+          }
+
+          # The activation rearm count must not be exhausted.
+          $ReArm = -1
+          Try {
+            $Product = Get-CimInstance -ClassName:'SoftwareLicensingService' -ErrorAction:'Stop'
+            $ReArm = [System.Int32]$Product.RemainingWindowsReArmCount
+          } Catch {
+            $ReArm = -1
+          }
+          If ($ReArm -eq 0) { $Failures.Add('the Windows rearm count is exhausted') }
+
+          # Whether AWS's own validation is even available here.
+          $Validation = 'C:\Program Files\Amazon\WorkspacesConfig\scripts\imagePrepValidation.ps1'
+
+          $Ansible.Changed = $False
+          $Ansible.Result = @{
+            failures        = $Failures.ToArray()
+            is_ready        = ($Failures.Count -eq 0)
+            rearm_remaining = $ReArm
+            aws_validation  = [System.IO.File]::Exists($Validation)
+          }
+
+    #endregion --- [ End: Our Own Pre-Checks ] ------------------------------------------------ #
+
+    #region ------ [ End: AWS's Own Validation, Where It Exists ] ----------------------------- #
+    # The authority. Invoked directly rather than through ImageChecker.exe, which is a dialog.
+    # Absent on anything that is not a real WorkSpace, and its absence is stated rather than
+    # skipped quietly -- a log that does not distinguish "did not run" from "passed" is worse than
+    # no log.
+
+    - name: 'END | Run The Validation The WorkSpaces Agent Ships'
+      register: '__capture_aws_validation__'
+      changed_when: false
+      failed_when: false
+      when: __capture_audit__.result.aws_validation | default(false) | bool
+
+      ansible.windows.win_powershell:
+        depth: 4
+        error_action: 'continue'
+        script: |
+          $Script = 'C:\Program Files\Amazon\WorkspacesConfig\scripts\imagePrepValidation.ps1'
+          $Output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script 2>&1
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ exit_code = $LASTEXITCODE; output = ($Output | Out-String) }
+
+    - name: 'END | Say Plainly That AWS Validation Did Not Run Here'
+      when: not (__capture_audit__.result.aws_validation | default(false) | bool)
+
+      ansible.builtin.debug:
+        msg: >-
+          AWS's own image validation was NOT run on this host: imagePrepValidation.ps1 ships with
+          the WorkSpaces agent and this machine does not carry it, which is expected on the EC2
+          stand-in and is not expected on a WorkSpace. The pre-checks above passed, and that is a
+          statement about this role's own tests, not an image-capture pass. Run this against a
+          real WorkSpace before treating any of it as evidence.
+
+    #endregion --- [ End: AWS's Own Validation, Where It Exists ] ----------------------------- #
+
+    #region ------ [ End: Refuse A Machine That Would Fail ] ---------------------------------- #
+
+    - name: 'END | Refuse A Machine Capture Would Reject'
+      ansible.builtin.assert:
+        fail_msg: >-
+          This machine would fail image capture:
+          {{ __capture_audit__.result.failures | default([]) | join('; ') }}. Volumes, user
+          profiles and services running as domain accounts are named rather than removed on
+          purpose -- each is somebody's data or somebody's decision, and none of them is this
+          role's to take.
+        quiet: true
+        that: [ __capture_audit__.result.is_ready | default(false) | bool ]
+
+    - name: 'END | Refuse A Machine AWS Itself Rejected'
+      when: __capture_audit__.result.aws_validation | default(false) | bool
+
+      ansible.builtin.assert:
+        fail_msg: >-
+          AWS's own image validation rejected this machine (exit
+          {{ __capture_aws_validation__.result.exit_code | default('unknown') }}). Its verdict is
+          the one that counts, whatever the pre-checks above concluded. Output follows:
+          {{ __capture_aws_validation__.result.output | default('(none)') }}
+        quiet: true
+        that: [ (__capture_aws_validation__.result.exit_code | default(1) | int) == 0 ]
+
+    #endregion --- [ End: Refuse A Machine That Would Fail ] ---------------------------------- #
+
+#endregion --- [ End: Would AWS Accept This Machine ] ----------------------------------------- #

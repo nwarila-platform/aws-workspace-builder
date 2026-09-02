@@ -812,6 +812,17 @@
             sha256: '964ef39b74aedf43ee40c1f9aebd7b4f2236e4a7802e5bb17a93289821ba3999'
     #endregion --- [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
 
+    #region ------ [ Roles: Workspace Capture Readiness ] ------------------------------------- #
+    # The image-capture requirements that a RUNNING desktop needs anyway: the services capture
+    # refuses to see disabled, TLS 1.2 available, addresses from DHCP, a machine PATH that can
+    # find System32 and PowerShell. Converged here, in the build, because leaving them to capture
+    # time would mean knowingly producing a machine that fails for reasons the build could have
+    # prevented -- discovered at the most expensive possible moment. The capture-only half lives
+    # in this role's clean state, in aws-workspace-builder-clean.yml.
+    - role: 'workspace_capture_readiness'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+    #endregion --- [ Roles: Workspace Capture Readiness ] ------------------------------------- #
+
     #region ------ [ Roles: Workspace Network Baseline ] -------------------------------------- #
     # The image's network posture, not a product: the guest firewall openings AWS requires of a
     # WorkSpace (management channel and both streaming protocols, admitted from the management

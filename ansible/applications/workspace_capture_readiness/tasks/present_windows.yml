@@ -1,0 +1,220 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/present_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Converges the image-capture requirements that a RUNNING WorkSpace needs anyway, during the
+# build, where fixing them is free.
+#
+# WHY THESE BELONG IN THE BUILD RATHER THAN AT CAPTURE. AWS's Image Checker refuses a capture
+# whose Windows Modules Installer is disabled, whose Remote Desktop Services is disabled, whose
+# adapters carry static addresses, whose machine PATH cannot find System32, or whose TLS 1.2 is
+# turned off. Every one of those is also wrong for a desktop somebody is using -- so leaving them
+# to capture time would mean the build knowingly produced a machine that fails for reasons it
+# could have prevented, and the operator learns at the most expensive possible moment.
+#
+# NOTHING HERE IS CAPTURE-ONLY. Removing staged packages, deleting profiles and clearing a pending
+# reboot all break a working desktop, so they wait for clean_windows.yml, which runs when the
+# machine is being given up.
+#
+# END is deliberately ungated, so a converged host proves the same state as a freshly built one.
+#
+# =========================================================================================== #
+---
+#region ------ [ Process: The Requirements A Desktop Wants Anyway ] --------------------------- #
+
+- name: 'PROCESS | Converge What Both A Desktop And A Capture Need'
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Services The Checker Requires Enabled ] ------------------------- #
+    # 'Enabled' to the Checker means not Disabled; Manual and Automatic both pass, and which one
+    # is the vendor's business rather than ours. Each is converged to the least-running mode that
+    # satisfies it, so nothing is started that Windows would not have started itself.
+
+    - name: 'PROCESS | Hold The Services Image Capture Requires Enabled'
+      loop: "{{ workspace_capture_readiness_running.services }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.why }})"
+
+      ansible.windows.win_service:
+        force_dependent_services: false
+        name: "{{ item.name }}"
+        start_mode: "{{ item.start_mode }}"
+
+    #endregion --- [ Process: Services The Checker Requires Enabled ] ------------------------- #
+
+    #region ------ [ Process: TLS 1.2 Must Be Available ] ------------------------------------- #
+    # AVAILABLE, not merely preferred. A baseline that disables 1.0 and 1.1 is wanted and is
+    # somebody else's to set; one that disables 1.2 in pursuit of a 1.3-only posture breaks image
+    # creation outright, and breaks a desktop's own outbound TLS with it.
+
+    - name: 'PROCESS | Enable TLS 1.2 For Both Halves Of The Handshake'
+      loop:
+        - { half: 'Client', name: 'Enabled', data: 1 }
+        - { half: 'Client', name: 'DisabledByDefault', data: 0 }
+        - { half: 'Server', name: 'Enabled', data: 1 }
+        - { half: 'Server', name: 'DisabledByDefault', data: 0 }
+      loop_control:
+        label: "{{ item.half }} {{ item.name }}"
+
+      ansible.windows.win_regedit:
+        data: "{{ item.data }}"
+        name: "{{ item.name }}"
+        path: "{{ workspace_capture_readiness_running.tls.root }}\\{{ item.half }}"
+        state: 'present'
+        type: 'dword'
+
+    #endregion --- [ Process: TLS 1.2 Must Be Available ] ------------------------------------- #
+
+    #region ------ [ Process: The Machine PATH ] ---------------------------------------------- #
+    # Capture runs its own tooling and has to find both of these. Appended rather than rewritten:
+    # the PATH belongs to the machine, and a role that owned it whole would silently drop whatever
+    # an installer legitimately added.
+
+    - name: 'PROCESS | Ensure The Machine PATH Can Find System32 And PowerShell'
+      register: '__capture_readiness_path__'
+      changed_when: '__capture_readiness_path__.result.added | default(0) | int > 0'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          Required: "{{ workspace_capture_readiness_running.path_entries }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String[]]$Required)
+          $Current = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+          $Parts = @($Current -split ';' | Where-Object { $PSItem })
+          $Added = 0
+          ForEach ($Entry In $Required) {
+            If ($Parts -notcontains $Entry) {
+              $Parts += $Entry
+              $Added++
+            }
+          }
+          If ($Added -gt 0) {
+            [System.Environment]::SetEnvironmentVariable('Path', ($Parts -join ';'), 'Machine')
+          }
+          $Ansible.Changed = ($Added -gt 0)
+          $Ansible.Result = @{ added = $Added; entries = $Parts }
+
+    #endregion --- [ Process: The Machine PATH ] ---------------------------------------------- #
+
+    #region ------ [ Process: Addresses Must Come From DHCP ] --------------------------------- #
+    # A static address on any enabled adapter fails the capture and, on a WorkSpace, is wrong
+    # anyway -- the service hands the desktop its address. Converged rather than asserted because
+    # switching an adapter back to DHCP is reversible and costs nothing; what it must not do is
+    # touch the tunnel adapter the build reaches the directory through, which is not a physical
+    # interface and does not carry a static configuration of its own.
+
+    - name: 'PROCESS | Return Physical Adapters To DHCP'
+      register: '__capture_readiness_dhcp__'
+      changed_when: '__capture_readiness_dhcp__.result.converted | default(0) | int > 0'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        script: |
+          $Converted = 0
+          $Static = [System.Collections.Generic.List[System.String]]::new()
+          ForEach ($Adapter In @(Get-NetAdapter -Physical -ErrorAction:'SilentlyContinue' |
+                                 Where-Object { $PSItem.Status -eq 'Up' })) {
+            $Interface = Get-NetIPInterface -InterfaceIndex:$Adapter.ifIndex -AddressFamily:'IPv4' `
+              -ErrorAction:'SilentlyContinue'
+            If ($Null -ne $Interface -and [System.String]$Interface.Dhcp -ne 'Enabled') {
+              $Static.Add([System.String]$Adapter.Name)
+              Set-NetIPInterface -InterfaceIndex:$Adapter.ifIndex -AddressFamily:'IPv4' -Dhcp:'Enabled'
+              $Converted++
+            }
+          }
+          $Ansible.Changed = ($Converted -gt 0)
+          $Ansible.Result = @{ converted = $Converted; adapters = $Static.ToArray() }
+
+    #endregion --- [ Process: Addresses Must Come From DHCP ] --------------------------------- #
+
+#endregion --- [ Process: The Requirements A Desktop Wants Anyway ] --------------------------- #
+
+
+#region ------ [ End: Prove The Build Left Them Right ] --------------------------------------- #
+
+- name: 'END | Prove The Build Left Them Right'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Read Every Invariant Back ] ----------------------------------------- #
+    # Read from the machine rather than trusted from the converge above, and ungated, so a host
+    # that was already correct proves the same thing as one that was just repaired.
+
+    - name: 'END | Read The Capture Invariants Back'
+      register: '__capture_readiness_proof__'
+
+      ansible.windows.win_powershell:
+        depth: 4
+        error_action: 'stop'
+        parameters:
+          Required: "{{ workspace_capture_readiness_running.path_entries }}"
+          Services: "{{ workspace_capture_readiness_running.services | map(attribute='name') | list }}"
+          TlsRoot: "{{ workspace_capture_readiness_running.tls.root }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String[]]$Services, [System.String]$TlsRoot, [System.String[]]$Required)
+          $Failures = [System.Collections.Generic.List[System.String]]::new()
+
+          ForEach ($Name In $Services) {
+            $Service = Get-Service -Name:$Name -ErrorAction:'SilentlyContinue'
+            If ($Null -eq $Service) {
+              $Failures.Add(('service {0} is not installed' -f $Name))
+            } ElseIf ([System.String]$Service.StartType -eq 'Disabled') {
+              $Failures.Add(('service {0} is Disabled' -f $Name))
+            }
+          }
+
+          ForEach ($Half In @('Client', 'Server')) {
+            $Key = '{0}\{1}' -f $TlsRoot, $Half
+            If (Test-Path -LiteralPath:$Key) {
+              $Item = Get-ItemProperty -LiteralPath:$Key -ErrorAction:'SilentlyContinue'
+              $EnabledProperty = $Item.PSObject.Properties['Enabled']
+              If ($Null -ne $EnabledProperty -and [System.Int32]$EnabledProperty.Value -eq 0) {
+                $Failures.Add(('TLS 1.2 {0} is explicitly disabled' -f $Half))
+              }
+            }
+          }
+
+          $Path = [System.String][System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+          ForEach ($Entry In $Required) {
+            If (@($Path -split ';') -notcontains $Entry) {
+              $Failures.Add(('machine PATH is missing {0}' -f $Entry))
+            }
+          }
+
+          ForEach ($Adapter In @(Get-NetAdapter -Physical -ErrorAction:'SilentlyContinue' |
+                                 Where-Object { $PSItem.Status -eq 'Up' })) {
+            $Interface = Get-NetIPInterface -InterfaceIndex:$Adapter.ifIndex -AddressFamily:'IPv4' `
+              -ErrorAction:'SilentlyContinue'
+            If ($Null -ne $Interface -and [System.String]$Interface.Dhcp -ne 'Enabled') {
+              $Failures.Add(('adapter {0} does not use DHCP' -f $Adapter.Name))
+            }
+          }
+
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ failures = $Failures.ToArray(); is_ready = ($Failures.Count -eq 0) }
+
+    #endregion --- [ End: Read Every Invariant Back ] ----------------------------------------- #
+
+    #region ------ [ End: Refuse A Build That Could Not Be Captured ] ------------------------- #
+
+    - name: 'END | Prove The Guest Meets The Capture Invariants'
+      ansible.builtin.assert:
+        fail_msg: >-
+          This guest would fail image capture on requirements the build is supposed to have left
+          correct: {{ __capture_readiness_proof__.result.failures | default([]) | join('; ') }}.
+          These are the requirements a running WorkSpace needs anyway, so a failure here is a
+          defect in the build rather than something for capture preparation to repair.
+        quiet: true
+        that: [ __capture_readiness_proof__.result.is_ready | default(false) | bool ]
+
+    #endregion --- [ End: Refuse A Build That Could Not Be Captured ] ------------------------- #
+
+#endregion --- [ End: Prove The Build Left Them Right ] --------------------------------------- #

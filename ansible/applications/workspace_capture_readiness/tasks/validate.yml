@@ -1,0 +1,35 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/validate.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Validates the merged configuration on the CONTROLLER, before anything touches the guest.
+#
+# The bucket is the one deployment-specific input: it carries an account id, so the playbook
+# supplies it rather than this role defaulting to somebody's. Everything else is an AWS constant.
+#
+# =========================================================================================== #
+---
+- name: 'VALIDATE | Require The Inputs Every State Uses'
+  ansible.builtin.assert:
+    that:
+      - workspace_capture_readiness_running.services | default([]) | length > 0
+      - workspace_capture_readiness_running.path_entries | default([]) | length > 0
+      - workspace_capture_readiness_running.allowed_drives | default([]) | length > 0
+      - workspace_capture_readiness_running.tls.root | default('') is match('^HKLM:\\\\')
+    fail_msg: >-
+      Refusing to continue: the services, PATH entries, allowed drives and TLS root are what this
+      role checks a capture against, and an empty one would pass everything silently.
+    quiet: true
+
+- name: 'VALIDATE | Require The Checker Source For The Capture State'
+  when: (state | default('present') | string | lower | trim) == 'clean'
+  ansible.builtin.assert:
+    that:
+      - workspace_capture_readiness_running.checker.bucket | default('') | length > 0
+      - workspace_capture_readiness_running.checker.object | default('') | length > 0
+      - workspace_capture_readiness_running.checker.directory | default('') is match('^[A-Za-z]:\\\\')
+    fail_msg: >-
+      Refusing to prepare a capture: the application repository bucket holding ImageChecker.exe
+      must be supplied by the playbook, because it carries an account id this role must not
+      assume. See meta/main.yml.
+    quiet: true

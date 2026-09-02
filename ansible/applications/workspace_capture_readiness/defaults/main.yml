@@ -1,0 +1,83 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for workspace_capture_readiness. The v3 loader merges the OS
+# overlay in vars/ over this map and publishes it as 'workspace_capture_readiness_running'.
+#
+# WHAT AWS WILL REFUSE TO CAPTURE, EXPRESSED AS DATA. The WorkSpaces Image Checker runs a fixed
+# set of tests and refuses image creation if any fails. They divide cleanly in two, and this role
+# has a state for each:
+#
+#   PRESENT  the ones a running WorkSpace needs anyway -- services that must be enabled, TLS 1.2,
+#            DHCP, a machine PATH that can find System32 and PowerShell. Converging these during
+#            the BUILD is right: a desktop wants them whether or not it is ever captured, and
+#            leaving them to capture time means the build produces a machine that would fail for
+#            reasons the build could have prevented.
+#
+#   CLEAN    the ones that are only true at the moment of capture -- no staged AppX packages, no
+#            extra user profiles, nothing pending a reboot, a rearm count that has not run out.
+#            These break a working desktop, which is why they wait until the machine is being
+#            given up.
+#
+# Values are AWS's, not this repository's. Verify them against the current guidance before
+# treating a pass here as evidence: https://docs.aws.amazon.com/workspaces/latest/adminguide/
+#
+# =========================================================================================== #
+---
+workspace_capture_readiness_defaults:
+
+  #region ------ [ Services the Image Checker requires ] -------------------------------------- #
+  # Named by service name rather than display name, because a display name is localised and a
+  # service name is not. 'enabled' means Manual or Automatic -- the Checker refuses Disabled, and
+  # does not care which of the other two.
+  services:
+    - name: 'TrustedInstaller'
+      why: 'Windows Modules Installer. Create Image requires it enabled.'
+      start_mode: 'manual'
+    - name: 'TermService'
+      why: 'Remote Desktop Services. Create Image requires it enabled.'
+      start_mode: 'manual'
+    - name: 'WinRM'
+      why: 'Windows Remote Management. Documented as a required image component.'
+      start_mode: 'auto'
+
+  #endregion --- [ Services the Image Checker requires ] -------------------------------------- #
+
+  #region ------ [ Transport security ] ------------------------------------------------------- #
+  # TLS 1.2 must be AVAILABLE. Disabling 1.0 and 1.1 is wanted and is somebody else's baseline to
+  # set; disabling 1.2 in pursuit of a 1.3-only posture breaks image creation outright.
+  tls:
+    root: 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2'
+
+  #endregion --- [ Transport security ] ------------------------------------------------------- #
+
+  #region ------ [ The machine PATH ] --------------------------------------------------------- #
+  # Create Image runs its own tooling and needs to find both of these. Their ABSENCE is the
+  # failure; order is not this role's business.
+  path_entries:
+    - 'C:\Windows\System32'
+    - 'C:\Windows\System32\WindowsPowerShell\v1.0'
+
+  #endregion --- [ The machine PATH ] --------------------------------------------------------- #
+
+  #region ------ [ AWS's own checker ] -------------------------------------------------------- #
+  # The front-end, staged where AWS documents it so an operator who wants the dialog finds it.
+  # The VALIDATION this role runs is imagePrepValidation.ps1, which ships with the WorkSpaces
+  # agent and cannot be downloaded -- staging the exe does not put the tests on a machine that
+  # has no agent.
+  checker:
+    bucket: ''
+    directory: 'C:\Program Files\Amazon'
+    object: 'Amazon Web Services/WorkSpaces Image Checker/current/ImageChecker.exe'
+
+  #endregion --- [ AWS's own checker ] -------------------------------------------------------- #
+
+  #region ------ [ Capture-time limits ] ------------------------------------------------------ #
+  # Only C and D may exist -- D is the WorkSpace's user volume. Profiles beyond the intended user,
+  # Default and Administrator must be gone. Both are refusals rather than repairs: deleting a
+  # volume or a profile is somebody's data, and this role cannot know whose.
+  allowed_drives: [ 'C', 'D' ]
+  allowed_profiles: [ 'Administrator', 'Default', 'Public', 'defaultuser0' ]
+
+  #endregion --- [ Capture-time limits ] ------------------------------------------------------ #

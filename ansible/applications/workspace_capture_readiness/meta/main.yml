@@ -1,0 +1,28 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for workspace_capture_readiness. Description-only (style guide 8): NOT an
+# enforcing argument spec. The role's tasks/validate.yml enforces its merged-config guards.
+#
+# NO REQUIRED INPUTS. Every value is an AWS-documented constant carried in defaults; the playbook
+# invokes the role bare. Override only to track a change in AWS's own guidance.
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'workspace_capture_readiness'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    The state AWS will accept for image capture. Its present state converges the requirements a
+    running WorkSpace needs anyway; its clean state performs the capture-only remediation and
+    then reads every Image Checker requirement back, refusing rather than repairing where the
+    repair would be somebody's data.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'workspaces', 'image']
+
+dependencies: []
