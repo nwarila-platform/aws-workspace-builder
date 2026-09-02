@@ -4,6 +4,14 @@
 #
 # STUB for catalog product 'Anaconda-Inc_Anaconda3' (fleet pin 2025.12-2).
 #
+# BLOCKED, MEASURED ON A REAL INSTALL. Anaconda3 2025.12-2 registers in Add/Remove Programs
+# as 'Anaconda3 2025.12-2 (Python 3.13.9 64-bit)' with DisplayVersion '2025.12-2'. That is
+# not a version any comparison can ORDER: the trailing build counter is not a component, so
+# it neither parses nor pads, and the shared reader would report the product missing on
+# every run and reinstall a 1.2 GB payload forever. Finishing this role needs the reader to
+# learn a literal-string comparison mode for vendors that do not use dotted versions --
+# a contract change, not a pin.
+#
 # The one honest action of an unfinished role is to refuse loudly: this role is not yet
 # wired into the playbook, and wiring it in early fails here, by name, rather than half
 # installing something. Finish it from the google_chrome pattern (BEGIN reads Add/Remove
@@ -17,5 +25,6 @@
   ansible.builtin.fail:
     msg: >-
       The 'anaconda3' role is a stub reserving catalog product 'Anaconda-Inc_Anaconda3' at fleet pin 2025.12-2.
-      Finish it from the google_chrome pattern and stage its artifact in the application
-      repository before wiring it into the play. See README.md.
+      It is BLOCKED rather than merely unfinished: the product registers DisplayVersion
+      '2025.12-2', which no version comparison can order. See the notes at the top of
+      this file.

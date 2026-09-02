@@ -1,21 +1,332 @@
-# =========================================================================================== #
+# ============================================================================================= #
 # File: '{{ role_path }}/tasks/present_windows.yml'
 # --- [ Description ] ----------------------------------------------------------------------- #
 #
-# STUB for catalog product 'Splunk-Inc_UniversalForwarder' (fleet pin 10.4.2.0).
+# Installs the Splunk Universal Forwarder at the pinned version from the application repository. This file carries
+# the catalog pattern splunk_universalforwarder sets as the exemplar: the same three-stage shape,
+# differing only in identity, layout and any post-install state the product owns.
 #
-# The one honest action of an unfinished role is to refuse loudly: this role is not yet
-# wired into the playbook, and wiring it in early fails here, by name, rather than half
-# installing something. Finish it from the google_chrome pattern (BEGIN reads Add/Remove
-# Programs, PROCESS fetches from the application repository and installs the verified
-# copy, END proves the registration), stage the artifact and its digest, then replace
-# this file.
+# BEGIN reads the machine and decides ONE action — install, upgrade, or none. PROCESS acts on
+# that decision, and END proves the result and cleans up. Every PROCESS task carries the decision
+# individually rather than the stage carrying it once, so a run always lists the same steps in
+# the same order: a converged host reads as a column of skips, not a stage that vanished.
 #
-# =========================================================================================== #
+# END is deliberately ungated, so a converged host proves the same state as a freshly built one.
+#
+# Install state comes from Add/Remove Programs, read by a first-class PowerShell script rather
+# than an inline block: the guest-side logic is developed and Pester-tested once under scripts/,
+# and the role executes a materialized copy. ARP carries the version and the install location
+# together and Windows removes the entry on uninstall, which the vendor's own product key cannot
+# answer because it survives uninstall.
+#
+# Everything moves through the runner: the controller fetches the installer and hands it to the
+# target, so the guest never receives cloud credentials or any other reach into S3. The digest is
+# verified on the guest, because that is the copy that executes.
+#
+# Return code 3010 is a success: it means the product installed and wants a restart. The role
+# restarts when the installer asks for one, and only then.
+#
+# ============================================================================================= #
 ---
-- name: 'BEGIN | Refuse The Unfinished Stub'
-  ansible.builtin.fail:
-    msg: >-
-      The 'splunk_universalforwarder' role is a stub reserving catalog product 'Splunk-Inc_UniversalForwarder' at fleet pin 10.4.2.0.
-      Finish it from the google_chrome pattern and stage its artifact in the application
-      repository before wiring it into the play. See README.md.
+#region ------ [ Begin: Install the Splunk Universal Forwarder on Windows ] ------------------------------------ #
+
+- name: 'BEGIN | Read The Machine And Decide One Action'
+
+  # Begin The 'Begin' Block
+  block:
+
+    #region ------ [ Begin: Read The Installed Product ] -------------------------------------- #
+    # Add/Remove Programs is the source of truth for install state: it carries the version and
+    # the install location together, and Windows removes the entry on uninstall. Parameters cross
+    # as typed module options, never Jinja spliced into the script source, which is what keeps
+    # the injection surface at zero. No changed_when: the script's $Ansible.Changed is the change
+    # report, and a read never changes anything. The referenced .ps1 is MATERIALIZED from
+    # scripts/ by scripts/materialize-role-scripts.sh (the role tracks only
+    # files/Get-InstalledSoftware.ps1.stub); run it before this role.
+
+    - name: 'BEGIN | Read The Installed Product From Add/Remove Programs'
+      register: '__splunk_universalforwarder_arp__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          DisplayName: "{{ splunk_universalforwarder_running.arp.display_name }}"
+          Version: "{{ splunk_universalforwarder_running.installer.version }}"
+        script: "{{ lookup('ansible.builtin.file', 'Get-InstalledSoftware.ps1') }}"
+
+    #endregion --- [ Begin: Read The Installed Product ] -------------------------------------- #
+
+#endregion --- [ Begin: Install the Splunk Universal Forwarder on Windows ] ------------------------------------ #
+
+
+#region ------ [ Process: Install the Splunk Universal Forwarder on Windows ] ---------------------------------- #
+
+- name: 'PROCESS | Install the Splunk Universal Forwarder At The Pinned Version'
+  vars:
+    __installer_name__: "{{ splunk_universalforwarder_running.installer.path | basename }}"
+    __guest_installer__: "{{ splunk_universalforwarder_running.install.staging_dir }}\\{{ __installer_name__ }}"
+    __action_required__: "{{ __splunk_universalforwarder_arp__.result.action_required }}"
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Create The Controller Staging Directory ] ----------------------- #
+
+    - name: 'PROCESS | Create The Controller Staging Directory'
+      changed_when: false
+      delegate_to: 'localhost'
+      register: '__splunk_universalforwarder_stage__'
+      when: __action_required__ | bool
+
+      ansible.builtin.tempfile:
+        path: '/tmp'
+        prefix: 'google-chrome-'
+        state: 'directory'
+        suffix: ''
+
+    #endregion --- [ Process: Create The Controller Staging Directory ] ----------------------- #
+
+    #region ------ [ Process: Fetch The Installer To The Controller ] ------------------------- #
+    # The module probes the BUCKET before the object, and that probe is authorized by a bucket-
+    # level grant this deployment deliberately does not hold: reading one pinned prefix must not
+    # imply the right to see the bucket. Skipping the probe is the module's documented answer for
+    # exactly that policy shape. A missing object still fails loudly — the key check uses
+    # head_object, which the object-level grant does authorize.
+
+    - name: 'PROCESS | Fetch The Installer To The Controller'
+      delegate_to: 'localhost'
+      vars:
+        __installer_key__: >-
+          {{ splunk_universalforwarder_running.installer.path
+             | replace('<version>', splunk_universalforwarder_running.installer.version) }}
+      when: __action_required__ | bool
+
+      amazon.aws.s3_object:
+        bucket: "{{ splunk_universalforwarder_running.installer.bucket }}"
+        ceph: false
+        debug_botocore_endpoint_logs: false
+        dest: "{{ __splunk_universalforwarder_stage__.path }}/{{ __installer_name__ }}"
+        dualstack: false
+        encrypt: true
+        encryption_mode: 'AES256'
+        expiry: 600
+        ignore_nonexistent_bucket: true
+        mode: 'get'
+        object: "{{ __installer_key__ }}"
+        overwrite: 'different'
+        permission: [ 'private' ]
+        prefix: ''
+        purge_tags: true
+        retries: 0
+        sig_v4: true
+        validate_bucket_name: true
+        validate_certs: true
+
+    #endregion --- [ Process: Fetch The Installer To The Controller ] ------------------------- #
+
+    #region ------ [ Process: Ensure The Guest Staging Directory Exists ] --------------------- #
+    # Everything moves through the runner: the controller holds the S3 credentials and hands the
+    # file to the guest, so the guest never receives any reach into S3.
+
+    - name: 'PROCESS | Ensure The Guest Staging Directory Exists'
+      when: __action_required__ | bool
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ splunk_universalforwarder_running.install.staging_dir }}"
+        state: 'directory'
+
+    #endregion --- [ Process: Ensure The Guest Staging Directory Exists ] --------------------- #
+
+    #region ------ [ Process: Copy The Installer To The Guest ] ------------------------------- #
+    # remote_src stays false because the source is the controller copy fetched above, and force
+    # stays true so a partial or stale staged file is replaced rather than trusted.
+
+    - name: 'PROCESS | Copy The Installer To The Guest'
+      register: '__splunk_universalforwarder_copied__'
+      when: __action_required__ | bool
+
+      ansible.windows.win_copy:
+        backup: false
+        decrypt: true
+        dest: "{{ __guest_installer__ }}"
+        force: true
+        local_follow: true
+        remote_src: false
+        src: "{{ __splunk_universalforwarder_stage__.path }}/{{ __installer_name__ }}"
+
+    #endregion --- [ Process: Copy The Installer To The Guest ] ------------------------------- #
+
+    #region ------ [ Process: Install Silently From The Verified Copy ] ----------------------- #
+    # An MSI needs no silent switch, but this one takes PROPERTIES: the licence acceptance it
+    # refuses to run without, and the imaging choices explained in defaults -- above all
+    # LAUNCHSPLUNK=0, which keeps the build from baking a forwarder identity into the image.
+    # The
+    # digest is verified on the guest, because that is the copy that executes. The run is
+    # bounded so a wedged installer fails inside Ansible rather than hanging the play. 3010 is
+    # accepted alongside 0 because it is not a failure: it means the product installed and wants
+    # a restart to finalise. The module turns that exact code into reboot_required, which the
+    # next region acts on, so the install is only reported complete once the machine is in the
+    # state the installer asked for.
+
+    - name: 'PROCESS | Install Silently From The Verified Copy'
+      async: "{{ splunk_universalforwarder_running.install.timeout_seconds }}"
+      poll: 15
+      register: '__splunk_universalforwarder_installed__'
+      when: __action_required__ | bool
+
+      ansible.windows.win_package:
+        arguments: "{{ splunk_universalforwarder_running.install.arguments }}"
+        checksum_algorithm: 'sha256'
+        checksum: "{{ splunk_universalforwarder_running.installer.sha256 }}"
+        expected_return_code: [ 0, 3010 ]
+        follow_redirects: 'safe'
+        force_basic_auth: false
+        http_agent: 'ansible-httpget'
+        maximum_redirection: 50
+        path: "{{ __guest_installer__ }}"
+        provider: 'auto'
+        proxy_use_default_credential: false
+        state: 'present'
+        url_timeout: 30
+        use_default_credential: false
+        use_proxy: true
+        validate_certs: true
+        verify_signature: false
+        wait_for_children: false
+
+    #endregion --- [ Process: Install Silently From The Verified Copy ] ----------------------- #
+
+    #region ------ [ Process: Reboot When The Installer Requires It ] ------------------------- #
+    # reboot_required is set by the module for return code 3010 and nothing else, so this acts
+    # on the installer's own request rather than on a guess. It is the only condition needed: a
+    # run that never installed leaves no reboot_required to be true.
+
+    - name: 'PROCESS | Reboot When The Installer Requires It'
+      when: __splunk_universalforwarder_installed__.reboot_required | default(false) | bool
+
+      ansible.windows.win_reboot:
+        boot_time_command: >-
+          (Get-CimInstance -ClassName Win32_OperatingSystem -Property
+          LastBootUpTime).LastBootUpTime.ToFileTime()
+        connect_timeout: 5
+        msg: 'Restarting to finalise the the Splunk Universal Forwarder installation.'
+        post_reboot_delay: 0
+        pre_reboot_delay: 2
+        reboot_timeout: 600
+
+    #endregion --- [ Process: Reboot When The Installer Requires It ] ------------------------- #
+
+#endregion --- [ Process: Install the Splunk Universal Forwarder on Windows ] ---------------------------------- #
+
+
+#region ------ [ End: Install the Splunk Universal Forwarder on Windows ] -------------------------------------- #
+
+- name: 'END | Prove The Result And Clean Up'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Re-Read The Installed Product ] ------------------------------------- #
+    # Ungated, so a converged host proves the same state as a freshly built one. This is the
+    # same read BEGIN performed, against the same script, so the two cannot disagree about what
+    # counts as installed.
+
+    - name: 'END | Re-Read The Installed Product From Add/Remove Programs'
+      register: '__splunk_universalforwarder_final_arp__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          DisplayName: "{{ splunk_universalforwarder_running.arp.display_name }}"
+          Version: "{{ splunk_universalforwarder_running.installer.version }}"
+        script: "{{ lookup('ansible.builtin.file', 'Get-InstalledSoftware.ps1') }}"
+
+    #endregion --- [ End: Re-Read The Installed Product ] ------------------------------------- #
+
+    #region ------ [ End: Put The Product Back In Add/Remove Programs ] ----------------------- #
+    # A registration marked SystemComponent is HIDDEN from Programs and Features, and anything
+    # that inventories a machine by reading Add/Remove Programs -- which is how this fleet knows
+    # what it is running -- cannot see it. An image whose software is invisible to inventory is
+    # not a managed image, so the flag is cleared rather than tolerated.
+    #
+    # The read above names keys ONLY when every registration of this product is hidden. Where a
+    # visible one already exists the list is empty and this loop does nothing: unhiding the MSI
+    # an installer bundle wraps would list one install twice and make the next read ambiguous.
+
+    - name: 'END | Unhide The Registration From Add/Remove Programs'
+      loop: "{{ __splunk_universalforwarder_final_arp__.result.hidden_registry_keys | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+
+      ansible.windows.win_regedit:
+        data: 0
+        name: 'SystemComponent'
+        path: "{{ item }}"
+        state: 'present'
+        type: 'dword'
+
+    #endregion --- [ End: Put The Product Back In Add/Remove Programs ] ----------------------- #
+
+    #region ------ [ End: Prove The Product Is Registered ] ----------------------------------- #
+    # Zero entries means the installer reported success without registering the product, which
+    # is the failure this postcondition exists to catch: an exit code is the installer's
+    # opinion, Add/Remove Programs is the machine's.
+
+    - name: 'END | Prove The Product Is Registered At Or Above The Pin'
+      ansible.builtin.assert:
+        fail_msg: >-
+          Expected '{{ splunk_universalforwarder_running.arp.display_name }}' registered at
+          {{ splunk_universalforwarder_running.installer.version }} or above; found
+          '{{ __splunk_universalforwarder_final_arp__.result.installed_version }}'. An empty version means
+          the installer reported success without registering the product.
+        quiet: true
+        that: [ not __splunk_universalforwarder_final_arp__.result.action_required ]
+
+    #endregion --- [ End: Prove The Product Is Registered ] ----------------------------------- #
+
+  # Begin the 'Always' block
+  always:
+
+    #region ------ [ Always: Remove The Staged Installer From The Guest ] --------------------- #
+    # Gated on the copy having been attempted, so a run that never staged deletes nothing while
+    # a partial copy is still cleaned up.
+
+    - name: 'END | Remove The Staged Installer From The Guest'
+      when: __splunk_universalforwarder_copied__ is defined and not (__splunk_universalforwarder_copied__ is skipped)
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ splunk_universalforwarder_running.install.staging_dir }}"
+        state: 'absent'
+
+    #endregion --- [ Always: Remove The Staged Installer From The Guest ] --------------------- #
+
+    #region ------ [ Always: Remove The Controller Staging Directory ] ------------------------ #
+
+    - name: 'END | Remove The Controller Staging Directory'
+      changed_when: false
+      delegate_to: 'localhost'
+      when: __splunk_universalforwarder_stage__ is defined and not (__splunk_universalforwarder_stage__ is skipped)
+
+      ansible.builtin.file:
+        access_time_format: '%Y%m%d%H%M.%S'
+        follow: true
+        force: false
+        modification_time_format: '%Y%m%d%H%M.%S'
+        path: "{{ __splunk_universalforwarder_stage__.path }}"
+        recurse: false
+        state: 'absent'
+        unsafe_writes: false
+
+    #endregion --- [ Always: Remove The Controller Staging Directory ] ------------------------ #
+
+#endregion --- [ End: Install the Splunk Universal Forwarder on Windows ] -------------------------------------- #

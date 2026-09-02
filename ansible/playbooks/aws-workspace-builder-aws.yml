@@ -652,6 +652,44 @@
             sha256: 'ee40b29e016a7bcb4f1876ea5ec235bcedc8f30363893bb5c9ba2c84a01a7b08'
     #endregion --- [ Roles: AWS CFN Bootstrap ] ----------------------------------------------- #
 
+    #region ------ [ Roles: Splunk Universal Forwarder ] -------------------------------------- #
+    # LAUNCHSPLUNK=0 in the role's defaults is the imaging decision: the forwarder is installed
+    # but never started here, so no per-instance identity is generated to be captured. It starts
+    # on the desktop, where generating one is right. The deployment server is site-specific and
+    # is supplied at runtime, not baked into an image.
+    - role: 'splunk_universalforwarder'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        splunk_universalforwarder:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '10.4.2.0'
+            sha256: '5ff1869fd1417d8af79e3a1b74635ae1d69ad7002563b9cad5d517023a58cb00'
+    #endregion --- [ Roles: Splunk Universal Forwarder ] -------------------------------------- #
+
+    #region ------ [ Roles: Node.js -- The Versions This Image Does Not Carry ] --------------- #
+    # THE IMAGE DECLARES ITS NODE BY NAMING THE OTHERS. Every Node.js MSI registers the same
+    # Add/Remove Programs name and they share an upgrade code, so they replace rather than join.
+    # Listing the unwanted versions as 'absent' states the choice out loud and enforces it: a
+    # desktop that arrived with the wrong Node -- from an older image, or a user install -- is
+    # brought back to the one this image carries, and the removal is proven like any other state.
+    - role: 'nodejs_21'
+      vars:
+        state: 'absent'
+        nodejs_21:
+          installer: { bucket: "{{ aws_account_id }}-apprepo", version: '21.7.3.0', sha256: 'de33d68e92e8948b96515bafee206d0b5c1f5440eb2e07aa15d6ce2f6493f53b' }
+    - role: 'nodejs_24'
+      vars:
+        state: 'absent'
+        nodejs_24:
+          installer: { bucket: "{{ aws_account_id }}-apprepo", version: '24.20.0.0', sha256: '28b69132c35ccc033bf8f2a67cd10c9d75ef5822593363309da448f2afff2d8a' }
+    - role: 'nodejs_25'
+      vars:
+        state: 'absent'
+        nodejs_25:
+          installer: { bucket: "{{ aws_account_id }}-apprepo", version: '25.9.0.0', sha256: 'e469104e5d0c99f9185fbf17179fbb1d732261e6e1f9d281b6b2308a0126fb6d' }
+    #endregion --- [ Roles: Node.js -- The Versions This Image Does Not Carry ] --------------- #
+
     #region ------ [ Roles: Amazon CloudWatch Agent ] ----------------------------------------- #
     # The pin is the MSI's own ProductVersion, not the vendor's published build string: this
     # product publishes '1.300072.0b1766' and registers 1.4.37928, and the role compares against

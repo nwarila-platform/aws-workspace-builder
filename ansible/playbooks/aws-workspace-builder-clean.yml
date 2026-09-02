@@ -32,6 +32,17 @@
   #region ------ [ Roles ] -------------------------------------------------------------------- #
   roles:
 
+    #region ------ [ Roles: Splunk Universal Forwarder ] -------------------------------------- #
+    # The forwarder must not carry a per-instance identity into the image. Its present state
+    # avoids creating one (LAUNCHSPLUNK=0), but install-time properties only apply AT INSTALL --
+    # a host that already had the forwarder keeps whatever it was installed with -- so the
+    # identity is removed here, where the state of the machine is what is checked rather than
+    # the intent of an install that may never have run.
+    - role: 'splunk_universalforwarder'
+      vars:
+        state: 'clean'
+    #endregion --- [ Roles: Splunk Universal Forwarder ] -------------------------------------- #
+
     #region ------ [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
     # "Amazon SSM Agent must be disabled -- The Create Image process requires the Amazon SSM
     # Agent service to be disabled." The agent stays installed and ships with the image; what

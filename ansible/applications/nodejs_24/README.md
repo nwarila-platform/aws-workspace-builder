@@ -1,6 +1,6 @@
-# `nodejs_24` role
+# `nodejs_22` role
 
-**Stub.** Reserves the WorkSpace image catalog product `Node.js-Foundation_Node.js-24` at fleet pin `24.20.0`.
+**Stub.** Reserves the WorkSpace image catalog product `Node.js-Foundation_Node.js-22` at fleet pin `22.23.2`.
 
 > **Scope:** none yet. The role is not wired into the playbook, and its present leg refuses
 > loudly if invoked, so wiring it in early fails by name at zero cost.

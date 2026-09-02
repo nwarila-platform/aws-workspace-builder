@@ -2,18 +2,50 @@
 # File: '{{ role_path }}/defaults/main.yml'
 # --- [ Description ] ----------------------------------------------------------------------- #
 #
-# Lowest-precedence configuration for the nodejs_24 STUB. The v3 loader merges the OS
-# overlay in vars/ over this map and publishes the result as 'nodejs_24_running'.
+# Lowest-precedence configuration for the nodejs_24 role. The v3 loader merges the OS overlay in
+# vars/ over this map and publishes the result as 'nodejs_24_running'; tasks read only the merged
+# map, never these keys directly.
 #
-# STUB: the map carries only the catalog target this role reserves. The key is the
-# fleet's <Publisher>_<Product> catalog identity and the version is the ratified fleet
-# pin; both are re-measured when the artifact lands in the application repository and
-# the role is finished from the google_chrome pattern.
+# This role follows THE CATALOG PATTERN google_chrome sets as the exemplar: an ARP identity, a
+# staging location, a bounded install, and an artifact layout keyed by <version>. See that
+# role's defaults for the full rationale; only the product values differ here.
+#
+# The deployment-specific inputs -- bucket, pinned version, digest -- are supplied by the
+# PLAYBOOK, where they are visible and changeable. See meta/main.yml and tasks/validate.yml.
 #
 # =========================================================================================== #
 ---
 nodejs_24_defaults:
 
-  catalog:
-    key: 'Node.js-Foundation_Node.js-24'
-    version: '24.20.0'
+  #region ------ [ Install ] ------------------------------------------------------------------ #
+
+  install:
+    # Staging directory on the guest. The installer is removed from here after execution. A site
+    # whose application control trusts only named paths overrides this to one of them.
+    staging_dir: 'C:\Windows\Temp\nodejs-24-install'
+
+    # A wrong silent switch can leave the installer waiting on a dialog instead of returning.
+    # Bounding it here fails the run inside Ansible rather than hanging the play.
+    timeout_seconds: 600
+
+  #endregion --- [ Install ] ------------------------------------------------------------------ #
+
+  #region ------ [ Product identity ] --------------------------------------------------------- #
+
+  # Install state is read from Add/Remove Programs, not from the vendor's own key. The ARP entry
+  # carries the version AND the install location, is a documented Windows contract rather than a
+  # vendor implementation detail, and is removed on uninstall by definition.
+  arp:
+    display_name: 'Node.js'
+
+  #endregion --- [ Product identity ] --------------------------------------------------------- #
+
+  #region ------ [ Installer layout ] --------------------------------------------------------- #
+
+  # The application-repository object key, keyed by the pinned version the playbook supplies.
+  # The vendor folder is named exactly as the product's ARP Publisher spells it, per the org
+  # apprepo convention.
+  installer:
+    path: 'Node.js Foundation/Node.js/<version>/node-v24.20.0-x64.msi'
+
+  #endregion --- [ Installer layout ] --------------------------------------------------------- #

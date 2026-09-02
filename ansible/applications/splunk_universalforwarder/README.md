@@ -1,6 +1,6 @@
-# `splunk_universalforwarder` role
+# `microsoft_edge` role
 
-**Stub.** Reserves the WorkSpace image catalog product `Splunk-Inc_UniversalForwarder` at fleet pin `10.4.2.0`.
+**Stub.** Reserves the WorkSpace image catalog product `Microsoft-Corporation_Microsoft-Edge` at fleet pin `151.0.4129.107`.
 
 > **Scope:** none yet. The role is not wired into the playbook, and its present leg refuses
 > loudly if invoked, so wiring it in early fails by name at zero cost.
