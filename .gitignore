@@ -80,6 +80,7 @@
 !/scripts/Get-InstalledSoftware.ps1
 !/scripts/Get-LapsCredential.pester.ps1
 !/scripts/Get-LapsCredential.ps1
+!/scripts/Set-RemoteManagementPolicy.pester.ps1
 !/scripts/Set-RemoteManagementPolicy.ps1
 !/scripts/compose-and-run.sh
 !/scripts/materialize-role-scripts.sh
