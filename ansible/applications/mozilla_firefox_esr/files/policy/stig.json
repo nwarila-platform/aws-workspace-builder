@@ -1,0 +1,133 @@
+{
+  "_comment_provenance": [
+    "DISA STIG enforcement for Mozilla Firefox ESR, delivered as enterprise policy rather than",
+    "Group Policy. Deployed to <install_dir>\\distribution\\policies.json.",
+    "",
+    "WHY A FILE AND NOT A GPO. The builder OU has GPO inheritance blocked, and its one",
+    "build GPO is unlinked before CreateWorkspaceImage -- so anything delivered by Group",
+    "Policy is gone from the captured image by design. These settings must SURVIVE capture",
+    "and ship inside the bundle, so they are written to disk (and for Chrome, to the",
+    "registry) as machine state instead.",
+    "",
+    "PROVENANCE AND VERIFICATION -- READ BEFORE TRUSTING THIS FILE.",
+    "The keys below are drafted against published Mozilla Firefox STIG requirements. They are",
+    "NOT machine-generated from the benchmark. Before this is used as a compliance artifact:",
+    "  1. Download the current STIG from https://public.cyber.mil/stigs/downloads/",
+    "  2. Reconcile every rule in the XCCDF against this file -- both directions.",
+    "  3. Populate _stig_rules below with the V-IDs actually present in that release.",
+    "Rule IDs are deliberately left empty rather than guessed: a wrong V-ID in a compliance",
+    "artifact is worse than an absent one.",
+    "",
+    "Firefox also accepts policy from HKLM\\SOFTWARE\\Policies\\Mozilla\\Firefox. The file",
+    "is used here because it is the portable, documented mechanism and is reviewable in git.",
+    "Settings the policy engine does not expose need the autoconfig pair -- see README.md."
+  ],
+
+  "_stig_rules": {
+    "_comment": "Populate from the XCCDF: { \"V-xxxxxx\": \"policy key that satisfies it\" }.",
+    "_benchmark_version": "UNVERIFIED - set to the release this file was reconciled against",
+    "_reconciled_on": "UNVERIFIED"
+  },
+
+  "policies": {
+
+    "AppAutoUpdate": true,
+    "ExtensionUpdate": true,
+
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisableFeedbackCommands": true,
+    "DisablePocket": true,
+    "DisableFirefoxAccounts": true,
+    "DisableProfileImport": true,
+    "DisableDeveloperTools": true,
+    "DisableSafeMode": true,
+    "DisableFormHistory": true,
+    "DisablePrivateBrowsing": true,
+    "DisableSetDesktopBackground": true,
+
+    "BlockAboutConfig": true,
+    "BlockAboutProfiles": true,
+
+    "OfferToSaveLogins": false,
+    "PasswordManagerEnabled": false,
+
+    "SearchSuggestEnabled": false,
+    "NetworkPrediction": false,
+
+    "SSLVersionMin": "tls1.2",
+
+    "DNSOverHTTPS": {
+      "Enabled": false,
+      "Locked": true
+    },
+
+    "PopupBlocking": {
+      "Default": true,
+      "Locked": true
+    },
+
+    "InstallAddonsPermission": {
+      "Allow": [],
+      "Default": false
+    },
+
+    "ExtensionSettings": {
+      "*": {
+        "installation_mode": "blocked",
+        "blocked_install_message": "Extension installation is restricted by policy."
+      }
+    },
+
+    "Permissions": {
+      "Autoplay": {
+        "Default": "block-audio-video",
+        "Locked": true
+      },
+      "Location": {
+        "BlockNewRequests": true,
+        "Locked": true
+      },
+      "Notifications": {
+        "BlockNewRequests": true,
+        "Locked": true
+      },
+      "Camera": {
+        "BlockNewRequests": true,
+        "Locked": true
+      },
+      "Microphone": {
+        "BlockNewRequests": true,
+        "Locked": true
+      }
+    },
+
+    "EncryptedMediaExtensions": {
+      "Enabled": false,
+      "Locked": true
+    },
+
+    "UserMessaging": {
+      "WhatsNew": false,
+      "ExtensionRecommendations": false,
+      "FeatureRecommendations": false,
+      "MoreFromMozilla": false,
+      "SkipOnboarding": true
+    },
+
+    "Certificates": {
+      "ImportEnterpriseRoots": true
+    },
+
+    "_comment_review_before_enabling": [
+      "The keys below appear in some STIG releases and are mission-affecting. Decide each one",
+      "against the benchmark and the desktop's purpose rather than inheriting this default.",
+      "  SanitizeOnShutdown  - clears history at exit; conflicts with rules requiring",
+      "                        browser history be RETAINED. Confirm which way the release runs.",
+      "  Cookies             - third-party cookie behaviour and Locked state.",
+      "  Homepage / newtab   - site-specific, not a generic hardening value.",
+      "  Proxy               - environment-specific.",
+      "  WebsiteFilter       - the URL blocklist equivalent; populate per environment."
+    ]
+  }
+}

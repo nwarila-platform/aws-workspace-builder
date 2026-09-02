@@ -402,6 +402,37 @@
 
     #endregion --- [ End: Re-Read The Installed Product ] ------------------------------------- #
 
+    #region ------ [ End: Apply The Enterprise Policy Overlay ] ------------------------------- #
+    # Written into the install tree as machine state, for the same reason the registry products
+    # are: the builder OU blocks GPO inheritance and its build policy is unlinked before capture,
+    # so a Group Policy setting would not survive into the image. This file does, on C:.
+    #
+    # One file, so one overlay. Firefox reads a single policies.json and the last writer would
+    # win silently; refusing more than one is the honest answer.
+
+    - name: 'END | Refuse More Than One Policy Overlay'
+      when: (mozilla_firefox_esr_running.policy.overlays | default([]) | length) > 1
+      ansible.builtin.fail:
+        msg: >-
+          Firefox reads exactly one policies.json, so
+          {{ mozilla_firefox_esr_running.policy.overlays | length }} overlays cannot all apply:
+          {{ mozilla_firefox_esr_running.policy.overlays | join(', ') }}. Combine them into one
+          overlay file under files/policy/ and name that.
+
+    - name: 'END | Install The Enterprise Policy Overlay'
+      when: (mozilla_firefox_esr_running.policy.overlays | default([]) | length) == 1
+
+      ansible.windows.win_copy:
+        backup: false
+        decrypt: true
+        dest: "{{ mozilla_firefox_esr_running.policy.file_path }}"
+        force: true
+        local_follow: true
+        remote_src: false
+        src: "policy/{{ mozilla_firefox_esr_running.policy.overlays | first }}.json"
+
+    #endregion --- [ End: Apply The Enterprise Policy Overlay ] ------------------------------- #
+
     #region ------ [ End: Put The Product Back In Add/Remove Programs ] ----------------------- #
     # A registration marked SystemComponent is HIDDEN from Programs and Features, and anything
     # that inventories a machine by reading Add/Remove Programs -- which is how this fleet knows

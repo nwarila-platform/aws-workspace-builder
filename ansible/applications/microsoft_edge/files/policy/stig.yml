@@ -1,0 +1,285 @@
+# =========================================================================================== #
+# File: 'ansible/applications/microsoft_edge/files/stig/policy/stig.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# The STIG overlay for Microsoft Edge, as registry policy values under
+# HKLM\SOFTWARE\Policies\Microsoft\Edge. Edge is Chromium-based, so the policy names largely
+# mirror Chrome's -- but the roots differ and the two must be written separately. A value set
+# under Google\Chrome has no effect on Edge.
+#
+# Same delivery rationale as the Chrome file: written as machine state so it SURVIVES
+# CreateWorkspaceImage, rather than by Group Policy which is unlinked before capture.
+#
+# PROVENANCE: drafted against the published Microsoft Edge STIG, NOT generated from the
+# benchmark. Reconcile against the current XCCDF from https://public.cyber.mil/stigs/downloads/
+# and populate 'stig_id' before treating this as a compliance artifact.
+#
+# =========================================================================================== #
+
+#region ------ [ Benchmark Identity ] --------------------------------------------------------- #
+
+benchmark:
+  title: 'Microsoft Edge Security Technical Implementation Guide'
+  version: 'UNVERIFIED'
+  reconciled_on: 'UNVERIFIED'
+  source: 'https://public.cyber.mil/stigs/downloads/'
+
+#endregion --- [ Benchmark Identity ] --------------------------------------------------------- #
+
+
+#region ------ [ Policy Root ] ---------------------------------------------------------------- #
+
+root: 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+
+#endregion --- [ Policy Root ] ---------------------------------------------------------------- #
+
+
+#region ------ [ Scalar Policies ] ------------------------------------------------------------ #
+
+settings:
+
+  # --- Identity, sync and profile separation ---------------------------------------------- #
+
+  - name: 'SyncDisabled'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Profile sync to a Microsoft account is disabled.'
+
+  - name: 'BrowserSignin'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Sign-in to the browser is disabled.'
+
+  - name: 'InPrivateModeAvailability'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'InPrivate browsing disabled, so browsing is subject to history retention.'
+
+  - name: 'BackgroundModeEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Edge does not keep background processes running after the last window closes.'
+
+  # --- History retention -------------------------------------------------------------------- #
+  # Direction matters: history must be KEPT. SavingBrowserHistoryDisabled is 0, not 1.
+
+  - name: 'SavingBrowserHistoryDisabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Browser history must be recorded.'
+
+  - name: 'AllowDeletingBrowserHistory'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Users may not delete recorded browser history.'
+
+  # --- Credential and form data ------------------------------------------------------------- #
+
+  - name: 'PasswordManagerEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'The built-in password manager is disabled.'
+
+  - name: 'AutofillAddressEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Address autofill is disabled.'
+
+  - name: 'AutofillCreditCardEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Payment-instrument autofill is disabled.'
+
+  - name: 'ImportSavedPasswords'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Saved passwords are not imported from another browser.'
+
+  # --- Developer surface --------------------------------------------------------------------- #
+
+  - name: 'DeveloperToolsAvailability'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Developer tools disabled on all sites.'
+
+  # --- Network and transport ----------------------------------------------------------------- #
+
+  - name: 'SSLVersionMin'
+    type: 'string'
+    data: 'tls1.2'
+    stig_id: ''
+    why: >-
+      Minimum negotiated TLS version. Do NOT raise this above tls1.2 without checking the
+      WorkSpaces Image Checker, which tests that TLS 1.2 is available on the image.
+
+  - name: 'DnsOverHttpsMode'
+    type: 'string'
+    data: 'off'
+    stig_id: ''
+    why: 'DNS-over-HTTPS disabled so name resolution stays on the inspected path.'
+
+  - name: 'BuiltInDnsClientEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Edge uses the operating system resolver rather than its own.'
+
+  - name: 'NetworkPredictionOptions'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Network prediction disabled.'
+
+  - name: 'QuicAllowed'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'QUIC disabled.'
+
+  # --- Telemetry and cloud services ---------------------------------------------------------- #
+
+  - name: 'MetricsReportingEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Diagnostic data is not sent to Microsoft.'
+
+  - name: 'SearchSuggestEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Search suggestions, which leak typed text to the provider, are disabled.'
+
+  - name: 'PersonalizationReportingEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Browsing history is not used for personalisation or advertising.'
+
+  - name: 'EdgeCollectionsEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Collections, which sync content to the cloud, are disabled.'
+
+  - name: 'EdgeShoppingAssistantEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Shopping assistant disabled.'
+
+  - name: 'UserFeedbackAllowed'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Feedback submission disabled.'
+
+  # --- Content defaults --------------------------------------------------------------------- #
+  # 1 = allow, 2 = block, 3 = ask where supported.
+
+  - name: 'DefaultPopupsSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Pop-ups blocked by default.'
+
+  - name: 'DefaultGeolocationSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Site access to physical location blocked by default.'
+
+  - name: 'DefaultNotificationsSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Site notification requests blocked by default.'
+
+  - name: 'DefaultWebUsbGuardSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Site access to USB devices blocked by default.'
+
+  - name: 'DefaultWebBluetoothGuardSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Site access to Bluetooth devices blocked by default.'
+
+  - name: 'AutoplayAllowed'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Media autoplay disabled.'
+
+  # --- Downloads and protection -------------------------------------------------------------- #
+
+  - name: 'PromptForDownloadLocation'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'The user is prompted for a download location rather than saving silently.'
+
+  - name: 'SmartScreenEnabled'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Microsoft Defender SmartScreen enabled. Direction matters: this is ON.'
+
+  - name: 'PreventSmartScreenPromptOverride'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Users may not bypass a SmartScreen warning for a site.'
+
+  - name: 'PreventSmartScreenPromptOverrideForFiles'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Users may not bypass a SmartScreen warning for a download.'
+
+  # --- Internet Explorer mode ---------------------------------------------------------------- #
+
+  - name: 'InternetExplorerIntegrationLevel'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: >-
+      IE mode disabled unless the environment requires it. If a site list is mandated, set this
+      per the benchmark and pin InternetExplorerIntegrationSiteList.
+
+#endregion --- [ Scalar Policies ] ------------------------------------------------------------ #
+
+
+#region ------ [ List Policies ] -------------------------------------------------------------- #
+
+lists:
+
+  - key: 'ExtensionInstallBlocklist'
+    stig_id: ''
+    why: 'Block all extensions, then allow only approved IDs below.'
+    items: [ '*' ]
+
+  - key: 'ExtensionInstallAllowlist'
+    stig_id: ''
+    why: 'Approved extension IDs. Empty by default -- populate per environment.'
+    items: []
+
+  - key: 'URLBlocklist'
+    stig_id: ''
+    why: 'Block the javascript: scheme in the address bar.'
+    items: [ 'javascript://*' ]
+
+#endregion --- [ List Policies ] -------------------------------------------------------------- #

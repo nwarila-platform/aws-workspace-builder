@@ -791,6 +791,10 @@
             bucket: "{{ aws_account_id }}-apprepo"
             version: '152.0.7977.76'
             sha256: 'b62295897570e665b67bdd7254bc46acb00de8026dc93465b4df781a2c10ca12'
+          # The baseline this image bakes in. Written as machine state so it survives capture;
+          # a production GPO managing the same product later still wins on precedence.
+          policy:
+            overlays: [ 'stig' ]
     #endregion --- [ Roles: Google Chrome ] --------------------------------------------------- #
 
     #region ------ [ Roles: Seven Zip ] ----------------------------------------------------------------- #
@@ -853,6 +857,10 @@
             bucket: "{{ aws_account_id }}-apprepo"
             version: '140.15.0.0'
             sha256: 'ef17e2f7ec5186c837ac53bd647f00ba89e8865f9851d01769d302f80f977397'
+          # The baseline this image bakes in. Written as machine state so it survives capture;
+          # a production GPO managing the same product later still wins on precedence.
+          policy:
+            overlays: [ 'stig' ]
     #endregion --- [ Roles: Mozilla Firefox Esr ] ------------------------------------------------------- #
 
     #region ------ [ Roles: Windows Exporter ] ---------------------------------------------------------- #
@@ -875,6 +883,10 @@
             bucket: "{{ aws_account_id }}-apprepo"
             version: '152.0.4191.53'
             sha256: '17b704410ae47e33f830230503affed39ba8ed36356e90f0cf6759231543a22c'
+          # The baseline this image bakes in. Written as machine state so it survives capture;
+          # a production GPO managing the same product later still wins on precedence.
+          policy:
+            overlays: [ 'stig' ]
     #endregion --- [ Roles: Microsoft Edge ] ------------------------------------------------------------ #
 
     #region ------ [ Roles: Putty ] --------------------------------------------------------------------- #
@@ -1063,6 +1075,10 @@
             bucket: "{{ aws_account_id }}-apprepo"
             version: '26.1.21789.0'
             sha256: 'f285a73605be56b07b21e7e57e4c55a15e65e513ef2316436a1d36adfa69e83b'
+          # The baseline this image bakes in. Written as machine state so it survives capture;
+          # a production GPO managing the same product later still wins on precedence.
+          policy:
+            overlays: [ 'stig' ]
     #endregion --- [ Roles: Adobe Acrobat Reader Dc ] --------------------------------------------------- #
 
     #region ------ [ Roles: Remote Desktop Manager ] ---------------------------------------------------- #

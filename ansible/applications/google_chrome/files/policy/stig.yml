@@ -1,0 +1,286 @@
+# =========================================================================================== #
+# File: 'ansible/applications/google_chrome/files/stig/policy/stig.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# The STIG overlay for Google Chrome on Windows, as registry policy values.
+#
+# THERE IS NO CHROME POLICY FILE ON WINDOWS. Chrome reads enterprise policy from the registry;
+# the JSON policy-file mechanism exists only on Linux and macOS. The 'initial_preferences' file
+# beside chrome.exe is NOT policy -- it seeds first-run defaults that a user can change, so it
+# satisfies no STIG rule. Anything that must be enforced is a registry value under
+# HKLM\SOFTWARE\Policies\Google\Chrome.
+#
+# WHY REGISTRY AND NOT A GPO. The builder OU has GPO inheritance blocked and its one build GPO is
+# unlinked before CreateWorkspaceImage, so a setting delivered by Group Policy is gone from the
+# captured image by design. These values are written directly as machine state so they SURVIVE
+# capture and ship inside the bundle. A production GPO managing Chrome later simply wins,
+# which is the correct precedence.
+#
+# STERILISE MUST NOT REMOVE THESE. The pre-capture play removes the build's WinRM policy keys,
+# which live under the same HKLM\SOFTWARE\Policies root. That removal has to be surgical -- keyed
+# on the WinRM subkey, never on the Policies hive -- or it strips the hardening it is meant
+# to preserve. See PLAN-production-workspaces.md section 7.
+#
+# PROVENANCE AND VERIFICATION -- READ BEFORE TRUSTING THIS FILE.
+# Values are drafted against published Google Chrome (Windows) STIG requirements, NOT
+# machine-generated from the benchmark. Before use as a compliance artifact:
+#   1. Download the current STIG from https://public.cyber.mil/stigs/downloads/
+#   2. Reconcile every rule in the XCCDF against this file, in both directions.
+#   3. Populate 'stig_id' on each entry from that release.
+# 'stig_id' is deliberately empty rather than guessed: a wrong V-ID in a compliance artifact is
+# worse than an absent one.
+#
+# =========================================================================================== #
+
+#region ------ [ Benchmark Identity ] --------------------------------------------------------- #
+# Set when this file is reconciled against a real benchmark release, so drift is visible in git.
+
+benchmark:
+  title: 'Google Chrome Current Windows Security Technical Implementation Guide'
+  version: 'UNVERIFIED'
+  reconciled_on: 'UNVERIFIED'
+  source: 'https://public.cyber.mil/stigs/downloads/'
+
+#endregion --- [ Benchmark Identity ] --------------------------------------------------------- #
+
+
+#region ------ [ Policy Root ] ---------------------------------------------------------------- #
+
+root: 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+
+#endregion --- [ Policy Root ] ---------------------------------------------------------------- #
+
+
+#region ------ [ Scalar Policies ] ------------------------------------------------------------ #
+# One registry value each. 'type' is the win_regedit type; 'data' is the enforced value.
+# 'why' states the control in one line so a reviewer can judge it without the benchmark open.
+
+settings:
+
+  # --- Identity, sync and profile separation ---------------------------------------------- #
+
+  - name: 'SyncDisabled'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Browser sync to a Google account is disabled.'
+
+  - name: 'BrowserSignin'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Sign-in to the browser is disabled entirely.'
+
+  - name: 'IncognitoModeAvailability'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Incognito mode disabled, so browsing is subject to history retention.'
+
+  - name: 'BackgroundModeEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Chrome does not continue running background processes after the last window closes.'
+
+  # --- History retention -------------------------------------------------------------------- #
+  # NOTE THE DIRECTION. The STIG requires history to be KEPT, so SavingBrowserHistoryDisabled is
+  # 0 (saving enabled) and deletion is blocked. Setting this to 1 fails the rule.
+
+  - name: 'SavingBrowserHistoryDisabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Browser history must be recorded.'
+
+  - name: 'AllowDeletingBrowserHistory'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Users may not delete recorded browser history.'
+
+  # --- Credential and form data ------------------------------------------------------------- #
+
+  - name: 'PasswordManagerEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'The built-in password manager is disabled.'
+
+  - name: 'AutofillAddressEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Address autofill is disabled.'
+
+  - name: 'AutofillCreditCardEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Payment-instrument autofill is disabled.'
+
+  - name: 'ImportSavedPasswords'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Saved passwords are not imported from another browser.'
+
+  # --- Developer surface --------------------------------------------------------------------- #
+
+  - name: 'DeveloperToolsAvailability'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Developer tools are disabled on all sites.'
+
+  # --- Network and transport ----------------------------------------------------------------- #
+
+  - name: 'SSLVersionMin'
+    type: 'string'
+    data: 'tls1.2'
+    stig_id: ''
+    why: 'Minimum negotiated TLS version.'
+
+  - name: 'DnsOverHttpsMode'
+    type: 'string'
+    data: 'off'
+    stig_id: ''
+    why: 'DNS-over-HTTPS disabled so name resolution stays on the inspected path.'
+
+  - name: 'BuiltInDnsClientEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Chrome uses the operating system resolver rather than its own.'
+
+  - name: 'NetworkPredictionOptions'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Network prediction (pre-resolution and pre-connect) disabled.'
+
+  - name: 'QuicAllowed'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'QUIC disabled.'
+
+  # --- Telemetry and cloud services ---------------------------------------------------------- #
+
+  - name: 'MetricsReportingEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Usage metrics and crash reports are not sent to Google.'
+
+  - name: 'SearchSuggestEnabled'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Search suggestions, which leak typed text to the provider, are disabled.'
+
+  - name: 'EnableMediaRouter'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Cast / media router disabled.'
+
+  # --- Content defaults --------------------------------------------------------------------- #
+  # Chrome content settings: 1 = allow, 2 = block, 3 = ask (where supported).
+
+  - name: 'DefaultPopupsSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Pop-ups blocked by default.'
+
+  - name: 'DefaultGeolocationSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Site access to physical location blocked by default.'
+
+  - name: 'DefaultNotificationsSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Site notification requests blocked by default.'
+
+  - name: 'DefaultWebUsbGuardSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Site access to USB devices blocked by default.'
+
+  - name: 'DefaultWebBluetoothGuardSetting'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Site access to Bluetooth devices blocked by default.'
+
+  - name: 'AutoplayAllowed'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Media autoplay disabled.'
+
+  # --- Downloads ----------------------------------------------------------------------------- #
+
+  - name: 'PromptForDownloadLocation'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'The user is prompted for a download location rather than saving silently.'
+
+  # --- Safe Browsing ------------------------------------------------------------------------- #
+  # Direction matters: the STIG requires Safe Browsing ON. Confirm whether the release wants
+  # legacy SafeBrowsingEnabled boolean, SafeBrowsingProtectionLevel, or both.
+
+  - name: 'SafeBrowsingProtectionLevel'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Safe Browsing enabled at standard protection.'
+
+#endregion --- [ Scalar Policies ] ------------------------------------------------------------ #
+
+
+#region ------ [ List Policies ] -------------------------------------------------------------- #
+# Chrome list policies are subkeys with values named '1', '2', '3' ... under the policy name.
+# They are modelled separately because win_regedit writes one value per task.
+
+lists:
+
+  - key: 'ExtensionInstallBlocklist'
+    stig_id: ''
+    why: 'Block all extensions, then allow only approved IDs below.'
+    items: [ '*' ]
+
+  - key: 'ExtensionInstallAllowlist'
+    stig_id: ''
+    why: >-
+      Approved extension IDs. Empty by default -- populate per environment. An empty allowlist
+      with a '*' blocklist means no extensions at all, which is the safe default but may not be
+      the intended posture.
+    items: []
+
+  - key: 'URLBlocklist'
+    stig_id: ''
+    why: 'Block the javascript: scheme in the omnibox.'
+    items: [ 'javascript://*' ]
+
+#endregion --- [ List Policies ] -------------------------------------------------------------- #
+
+
+#region ------ [ Deliberately Not Set ] ------------------------------------------------------- #
+# Recorded so a reviewer can see these were considered rather than missed.
+#
+#   HomepageLocation / RestoreOnStartupURLs  site-specific, not generic hardening
+#   ProxySettings                            environment-specific
+#   DefaultSearchProvider*                   environment-specific; some releases require an
+#                                            enterprise provider be pinned -- check the benchmark
+#   CloudPrintProxyEnabled                   the feature is retired; the value is inert
+#   DefaultPluginsSetting                    deprecated with NPAPI/Flash removal
+#   ChromeCleanupEnabled                     Windows-only cleanup tool; confirm against release
+#
+#endregion --- [ Deliberately Not Set ] ------------------------------------------------------- #

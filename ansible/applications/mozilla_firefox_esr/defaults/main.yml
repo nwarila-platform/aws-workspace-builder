@@ -40,6 +40,21 @@ mozilla_firefox_esr_defaults:
 
   #endregion --- [ Product identity ] --------------------------------------------------------- #
 
+  #region ------ [ Enterprise policy ] -------------------------------------------------------- #
+  # SAME IDEA AS THE OTHER BROWSERS, DIFFERENT VENDOR MECHANISM. Firefox reads enterprise policy
+  # from a JSON file in its own install tree, so there is no registry root here and the overlay
+  # is a .json rather than a .yml. Firefox also accepts policy from the registry; the file is
+  # used because it is the documented portable mechanism and is reviewable in git as one object.
+  #
+  # WHICH overlay an image carries is a deployment decision and comes from the playbook. Unlike
+  # the registry products, overlays here are NOT merged: the vendor reads one file, so naming
+  # more than one overlay is refused rather than silently resolved.
+  policy:
+    file_path: 'C:\Program Files\Mozilla Firefox\distribution\policies.json'
+    overlays: []
+
+  #endregion --- [ Enterprise policy ] -------------------------------------------------------- #
+
   #region ------ [ Installer layout ] --------------------------------------------------------- #
 
   # The application-repository object key, keyed by the pinned version the playbook supplies.

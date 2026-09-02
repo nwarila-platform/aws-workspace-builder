@@ -1,0 +1,246 @@
+# =========================================================================================== #
+# File: 'ansible/applications/adobe_acrobat_reader_dc/files/stig/policy/stig.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# The STIG overlay for Adobe Acrobat Reader DC, as registry values under the FeatureLockDown
+# key. FeatureLockDown is Adobe's documented enterprise-lockdown root: values written there are
+# machine policy and are not user-overridable, which is what makes this suitable for a golden
+# image. Values written elsewhere in the Adobe hive are user preferences and will not hold.
+#
+# TRACK MATTERS. DISA publishes separate benchmarks for the Continuous track and the Classic
+# (DC 20xx / 2020) track, and the version key in the path differs between them. Confirm which
+# track the pinned installer delivers before reconciling -- a correct value under the wrong
+# version key enforces nothing.
+#
+# Same delivery rationale as the browser files: written as machine state so it SURVIVES
+# CreateWorkspaceImage, rather than by Group Policy which is unlinked before capture.
+#
+# PROVENANCE: drafted against the published Adobe Acrobat Reader DC STIG, NOT generated from the
+# benchmark. Reconcile against the current XCCDF from https://public.cyber.mil/stigs/downloads/
+# and populate 'stig_id' before treating this as a compliance artifact.
+#
+# =========================================================================================== #
+
+#region ------ [ Benchmark Identity ] --------------------------------------------------------- #
+
+benchmark:
+  title: 'Adobe Acrobat Reader DC Continuous Track Security Technical Implementation Guide'
+  version: 'UNVERIFIED'
+  reconciled_on: 'UNVERIFIED'
+  track: 'continuous'
+  source: 'https://public.cyber.mil/stigs/downloads/'
+
+#endregion --- [ Benchmark Identity ] --------------------------------------------------------- #
+
+
+#region ------ [ Policy Roots ] --------------------------------------------------------------- #
+# The Continuous track uses the 'DC' version key. The Classic track uses a year key (for example
+# '2020') in the same position. Set 'root' to match the installed track, not to both.
+
+root: 'HKLM:\SOFTWARE\Policies\Adobe\Acrobat Reader\DC\FeatureLockDown'
+
+# Sub-roots used by a few controls that live one level down.
+roots:
+  cloud: 'HKLM:\SOFTWARE\Policies\Adobe\Acrobat Reader\DC\FeatureLockDown\cCloud'
+  services: 'HKLM:\SOFTWARE\Policies\Adobe\Acrobat Reader\DC\FeatureLockDown\cServices'
+  sharepoint: 'HKLM:\SOFTWARE\Policies\Adobe\Acrobat Reader\DC\FeatureLockDown\cSharePoint'
+  webmail: 'HKLM:\SOFTWARE\Policies\Adobe\Acrobat Reader\DC\FeatureLockDown\cWebmailProfiles'
+  default_launch: >-
+    HKLM:\SOFTWARE\Policies\Adobe\Acrobat Reader\DC\FeatureLockDown\cDefaultLaunchURLPerms
+
+#endregion --- [ Policy Roots ] --------------------------------------------------------------- #
+
+
+#region ------ [ Protected View And Sandboxing ] ---------------------------------------------- #
+# The core of the benchmark. These are the controls that contain a hostile PDF.
+
+settings:
+
+  - name: 'bProtectedMode'
+    root: 'root'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Protected Mode (the sandbox) enabled.'
+
+  - name: 'iProtectedView'
+    root: 'root'
+    type: 'dword'
+    data: 2
+    stig_id: ''
+    why: 'Protected View enabled for all files from untrusted sources.'
+
+  - name: 'bEnhancedSecurityStandalone'
+    root: 'root'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Enhanced Security enabled for standalone documents.'
+
+  - name: 'bEnhancedSecurityInBrowser'
+    root: 'root'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Enhanced Security enabled for documents opened in a browser.'
+
+  - name: 'bDisableTrustedFolders'
+    root: 'root'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Users may not exempt folders from Enhanced Security.'
+
+  - name: 'bDisableTrustedSites'
+    root: 'root'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Users may not exempt host-based locations from Enhanced Security.'
+
+  # --- Active content -------------------------------------------------------------------- #
+
+  - name: 'bEnableJS'
+    root: 'root'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'JavaScript in PDFs disabled -- the single largest attack surface in the product.'
+
+  - name: 'bDisableJavaScript'
+    root: 'root'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: >-
+      Paired lockdown for JavaScript. Some benchmark releases key on bEnableJS and some on
+      bDisableJavaScript; setting both consistently is safe and survives either.
+
+  - name: 'bEnableFlash'
+    root: 'root'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'Flash content disabled. The runtime is retired; the value remains inspectable.'
+
+  - name: 'bAllowOpenFile'
+    root: 'root'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: 'PDFs may not launch attachments or arbitrary files.'
+
+  - name: 'bSecureOpenFile'
+    root: 'root'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Warn before opening a file a PDF requests.'
+
+  - name: 'iFileAttachmentPerms'
+    root: 'root'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'File attachments may not be opened from within a PDF.'
+
+  # --- Outbound network behaviour ---------------------------------------------------------- #
+
+  - name: 'iURLPerms'
+    root: 'default_launch'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'PDFs may not silently open internet URLs.'
+
+  - name: 'iUnknownURLPerms'
+    root: 'default_launch'
+    type: 'dword'
+    data: 3
+    stig_id: ''
+    why: 'Unknown URL schemes are blocked rather than prompted.'
+
+  # --- Cloud and connected services ---------------------------------------------------------- #
+
+  - name: 'bDisableADCFileStore'
+    root: 'cloud'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Adobe Document Cloud file storage disabled.'
+
+  - name: 'bUpdater'
+    root: 'root'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: >-
+      Adobe's own updater disabled -- patching is the image pipeline's job, not the desktop's.
+      Confirm direction against the benchmark: some releases require the updater ENABLED where
+      no other patch mechanism exists. This value assumes the image is rebuilt to patch.
+
+  - name: 'bToggleAdobeDocumentServices'
+    root: 'services'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Adobe online document services disabled.'
+
+  - name: 'bToggleAdobeSign'
+    root: 'services'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Adobe Sign disabled.'
+
+  - name: 'bTogglePrefsSync'
+    root: 'services'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Preference synchronisation to Adobe disabled.'
+
+  - name: 'bToggleWebConnectors'
+    root: 'services'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Third-party web connectors disabled.'
+
+  - name: 'bDisableSharePointFeatures'
+    root: 'sharepoint'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'SharePoint integration disabled.'
+
+  - name: 'bDisableWebmail'
+    root: 'webmail'
+    type: 'dword'
+    data: 1
+    stig_id: ''
+    why: 'Webmail integration disabled.'
+
+  - name: 'bUpdaterServiceEnabled'
+    root: 'root'
+    type: 'dword'
+    data: 0
+    stig_id: ''
+    why: >-
+      The Adobe updater SERVICE. Distinct from bUpdater and worth setting explicitly: a running
+      updater service is also a service the pre-capture audit will see.
+
+#endregion --- [ Protected View And Sandboxing ] ---------------------------------------------- #
+
+
+#region ------ [ Image Checker Interaction ] -------------------------------------------------- #
+# Nothing in this file should affect capture: every value is an application preference under the
+# Policies hive, and none touches DHCP, TLS availability, WinRM, the routing table, AppX staging,
+# user profiles or the certificate store.
+#
+# The one item to watch is bUpdater / bUpdaterServiceEnabled. Disabling the updater suits
+# an image that is rebuilt to patch, but leaves the SERVICE present. Confirm in the pre-capture
+# audit that AdobeARMservice is stopped and disabled rather than merely unused -- a running
+# service under an unexpected identity is exactly what the checker's service test looks for.
+#
+#endregion --- [ Image Checker Interaction ] -------------------------------------------------- #

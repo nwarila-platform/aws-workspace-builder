@@ -402,6 +402,50 @@
 
     #endregion --- [ End: Re-Read The Installed Product ] ------------------------------------- #
 
+    #region ------ [ End: Apply The Enterprise Policy Overlays ] ------------------------------ #
+    # Written as MACHINE STATE, not Group Policy. The builder OU blocks GPO inheritance and its
+    # one build policy is unlinked before capture, so anything Group Policy delivered would be
+    # gone from the captured image by design. Values under HKLM\SOFTWARE\Policies live on C:,
+    # so they are captured and ship inside the bundle; a production GPO managing the same product
+    # later simply wins on precedence, which is the right outcome.
+    #
+    # Overlays are merged HERE rather than applied one after another, because applying them in
+    # sequence would let two overlays that disagree write in turn on every run -- each repairing
+    # the other's value, reporting changed forever. Merged by name, last overlay wins.
+    #
+    # The documents say 'settings' rather than 'values' deliberately: 'values' is a dictionary
+    # method in Jinja, so map(attribute='values') would fetch the method rather than the key.
+
+    - name: 'END | Load The Enterprise Policy Overlays'
+      loop: "{{ microsoft_edge_running.policy.overlays | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      when: (microsoft_edge_running.policy.overlays | default([]) | length) > 0
+
+      ansible.builtin.set_fact:
+        __microsoft_edge_policy_docs__: >-
+          {{ (__microsoft_edge_policy_docs__ | default([]))
+             + [ lookup('ansible.builtin.file', 'policy/' ~ item ~ '.yml') | from_yaml ] }}
+
+    - name: 'END | Apply The Merged Enterprise Policy'
+      vars:
+        __docs__: "{{ __microsoft_edge_policy_docs__ | default([]) }}"
+        __settings__: "{{ __docs__ | map(attribute='settings') | flatten }}"
+        __lists__: "{{ __docs__ | map(attribute='lists') | select('defined') | flatten }}"
+      when: (__microsoft_edge_policy_docs__ | default([]) | length) > 0
+      register: '__microsoft_edge_policy__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          Lists: "{{ dict(__lists__ | map(attribute='key') | zip(__lists__)).values() | list }}"
+          Root: "{{ microsoft_edge_running.policy.root }}"
+          Values: "{{ dict(__settings__ | map(attribute='name') | zip(__settings__)).values() | list }}"
+        script: "{{ lookup('ansible.builtin.file', 'Set-ApplicationPolicy.ps1') }}"
+
+    #endregion --- [ End: Apply The Enterprise Policy Overlays ] ------------------------------ #
+
     #region ------ [ End: Put The Product Back In Add/Remove Programs ] ----------------------- #
     # A registration marked SystemComponent is HIDDEN from Programs and Features, and anything
     # that inventories a machine by reading Add/Remove Programs -- which is how this fleet knows

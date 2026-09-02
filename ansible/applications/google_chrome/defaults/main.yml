@@ -50,6 +50,26 @@ google_chrome_defaults:
 
   #endregion --- [ Product identity ] --------------------------------------------------------- #
 
+  #region ------ [ Enterprise policy ] -------------------------------------------------------- #
+  # WHAT THIS PRODUCT CAN BE TOLD, AND WHICH OF IT THIS IMAGE SAYS. The role supports the
+  # product's whole enterprise-policy surface: any value the vendor documents under the root
+  # below can be set, in any registry type, including the numbered subkey lists the vendor uses
+  # for blocklists and allowlists. Nothing about that mechanism is specific to one baseline.
+  #
+  # WHICH settings is a separate question, and its answer is an OVERLAY -- a named document under
+  # files/policy/ holding a coherent set of them. 'stig' is one such set. A site with its own
+  # baseline adds its own file beside it; overlays apply in the order named, so a later one
+  # refines an earlier one rather than replacing it.
+  #
+  # The root is a fact about the product and lives here. WHICH overlays an image carries is a
+  # deployment decision and comes from the playbook -- an image that hardens nothing is a
+  # legitimate image, so the default is none.
+  policy:
+    root: 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+    overlays: []
+
+  #endregion --- [ Enterprise policy ] -------------------------------------------------------- #
+
   #region ------ [ Installer layout ] --------------------------------------------------------- #
 
   # The application-repository object key, keyed by the pinned version the playbook supplies.

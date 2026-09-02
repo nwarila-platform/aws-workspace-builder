@@ -64,6 +64,12 @@
 !/ansible/applications/*/files/Get-InstalledSoftware.ps1.stub
 !/ansible/applications/*/files/Get-LapsCredential.ps1.stub
 !/ansible/applications/*/files/Set-RemoteManagementPolicy.ps1.stub
+!/ansible/applications/*/files/policy/
+!/ansible/applications/*/files/policy/*.yml
+!/ansible/applications/*/files/policy/*.json
+!/ansible/applications/*/files/Set-ApplicationPolicy.ps1.stub
+!/scripts/Set-ApplicationPolicy.pester.ps1
+!/scripts/Set-ApplicationPolicy.ps1
 !/ansible/applications/*/handlers/main.yml
 !/ansible/applications/*/meta/main.yml
 !/ansible/applications/*/tasks/main.yml
