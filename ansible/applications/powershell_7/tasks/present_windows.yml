@@ -35,6 +35,55 @@
   # Begin The 'Begin' Block
   block:
 
+    #region ------ [ Begin: Normalize The Registered Version ] ----------------------------- #
+    # THE POST-PROCESS THAT MAKES THIS PRODUCT READABLE. The vendor registers '2025.12-2', which
+    # no comparison can order, so the registration is rewritten in place to the same release
+    # expressed as a real version. It runs BEFORE the read below because the read's whole job is
+    # to decide whether to install, and it cannot decide on a version it cannot parse -- and
+    # again after the install, for a product that was not there to rewrite the first time.
+    #
+    # Idempotent by construction: it rewrites only a value that still matches the vendor's raw
+    # form, so a machine already normalized reports no change, and a machine carrying some other
+    # version is left alone rather than relabelled.
+
+    - name: 'BEGIN | Normalize The Registered Version To A Real One'
+      when: powershell_7_running.version_rewrite is defined
+      register: '__powershell_7_rewrite__'
+      changed_when: '__powershell_7_rewrite__.result.rewritten | default(0) | int > 0'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          DisplayName: "{{ powershell_7_running.arp.display_name }}"
+          FromVersion: "{{ powershell_7_running.version_rewrite.from }}"
+          ToVersion: "{{ powershell_7_running.version_rewrite.to }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$DisplayName, [System.String]$FromVersion, [System.String]$ToVersion)
+          $Roots = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+          )
+          $Rewritten = 0
+          ForEach ($Root In $Roots) {
+            If (-not (Test-Path -LiteralPath:$Root)) { Continue }
+            ForEach ($Key In (Get-ChildItem -LiteralPath:$Root)) {
+              $Item = Get-ItemProperty -LiteralPath:$Key.PSPath -ErrorAction:'SilentlyContinue'
+              If ($Null -eq $Item) { Continue }
+              $NameProperty = $Item.PSObject.Properties['DisplayName']
+              If ($Null -eq $NameProperty -or $NameProperty.Value -ne $DisplayName) { Continue }
+              $VersionProperty = $Item.PSObject.Properties['DisplayVersion']
+              If ($Null -eq $VersionProperty -or [System.String]$VersionProperty.Value -ne $FromVersion) { Continue }
+              Set-ItemProperty -LiteralPath:$Key.PSPath -Name:'DisplayVersion' -Value:$ToVersion
+              $Rewritten++
+            }
+          }
+          $Ansible.Changed = ($Rewritten -gt 0)
+          $Ansible.Result = @{ rewritten = $Rewritten }
+
+    #endregion --- [ Begin: Normalize The Registered Version ] ----------------------------- #
+
     #region ------ [ Begin: Read The Installed Product ] -------------------------------------- #
     # Add/Remove Programs is the source of truth for install state: it carries the version and
     # the install location together, and Windows removes the entry on uninstall. Parameters cross
@@ -274,6 +323,56 @@
         reboot_timeout: 600
 
     #endregion --- [ Process: Reboot When The Installer Requires It ] ------------------------- #
+
+    #region ------ [ Process: Normalize The Registered Version ] ----------------------------- #
+    # THE POST-PROCESS THAT MAKES THIS PRODUCT READABLE. The vendor registers '2025.12-2', which
+    # no comparison can order, so the registration is rewritten in place to the same release
+    # expressed as a real version. It runs BEFORE the read below because the read's whole job is
+    # to decide whether to install, and it cannot decide on a version it cannot parse -- and
+    # again after the install, for a product that was not there to rewrite the first time.
+    #
+    # Idempotent by construction: it rewrites only a value that still matches the vendor's raw
+    # form, so a machine already normalized reports no change, and a machine carrying some other
+    # version is left alone rather than relabelled.
+
+    - name: 'PROCESS | Normalize The Registered Version To A Real One'
+      when: (powershell_7_running.version_rewrite is defined) and (__action_required__ | bool)
+      register: '__powershell_7_rewrite__'
+      changed_when: '__powershell_7_rewrite__.result.rewritten | default(0) | int > 0'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          DisplayName: "{{ powershell_7_running.arp.display_name }}"
+          FromVersion: "{{ powershell_7_running.version_rewrite.from }}"
+          ToVersion: "{{ powershell_7_running.version_rewrite.to }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$DisplayName, [System.String]$FromVersion, [System.String]$ToVersion)
+          $Roots = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+          )
+          $Rewritten = 0
+          ForEach ($Root In $Roots) {
+            If (-not (Test-Path -LiteralPath:$Root)) { Continue }
+            ForEach ($Key In (Get-ChildItem -LiteralPath:$Root)) {
+              $Item = Get-ItemProperty -LiteralPath:$Key.PSPath -ErrorAction:'SilentlyContinue'
+              If ($Null -eq $Item) { Continue }
+              $NameProperty = $Item.PSObject.Properties['DisplayName']
+              If ($Null -eq $NameProperty -or $NameProperty.Value -ne $DisplayName) { Continue }
+              $VersionProperty = $Item.PSObject.Properties['DisplayVersion']
+              If ($Null -eq $VersionProperty -or [System.String]$VersionProperty.Value -ne $FromVersion) { Continue }
+              Set-ItemProperty -LiteralPath:$Key.PSPath -Name:'DisplayVersion' -Value:$ToVersion
+              $Rewritten++
+            }
+          }
+          $Ansible.Changed = ($Rewritten -gt 0)
+          $Ansible.Result = @{ rewritten = $Rewritten }
+
+    #endregion --- [ Process: Normalize The Registered Version ] ----------------------------- #
+
 
 #endregion --- [ Process: Install PowerShell 7 on Windows ] ---------------------------------- #
 

@@ -31,8 +31,8 @@
       - anaconda3_running.installer.path | default('') | length > 0
       - anaconda3_running.installer.sha256 | default('') is match('^[0-9a-f]{64}$')
       - anaconda3_running.install.timeout_seconds | int > 0
-      - anaconda3_running.install.mode | default('') is match('^/[a-z]+$')
-      - anaconda3_running.install.options | default({}) | length > 0
+      - anaconda3_running.install.arguments | default('') | length > 0
+      - anaconda3_running.version_rewrite.to | default('') is match('^[0-9]+(\\.[0-9]+){3}$')
     fail_msg: >-
       Refusing to deploy: a required input is missing or malformed. The playbook must supply the
       installer bucket, the versioned object key, and the lowercase 64-char sha256 of that exact

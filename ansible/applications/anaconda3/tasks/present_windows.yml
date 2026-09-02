@@ -216,30 +216,6 @@
 
     #endregion --- [ Process: Copy The Installer To The Guest ] ------------------------------- #
 
-    #region ------ [ Process: Write The Vendor Answer File ] ---------------------------------- #
-    # The name and the location are the vendor's contract, not a choice: the installer looks for
-    # 'unattend.xml' in its own directory and reads the options from it. Rendered from the merged
-    # configuration, so what the machine is told is exactly what the role declares -- and because
-    # the staging directory is this role's alone, the answer file cannot be read by another
-    # interpreter's installer.
-
-    - name: 'PROCESS | Write The Vendor Answer File Beside The Installer'
-      when: __action_required__ | bool
-
-      ansible.windows.win_copy:
-        backup: false
-        content: |
-          <Options>
-          {% for __option_name__, __option_value__ in anaconda3_running.install.options.items() %}
-            <Option Name="{{ __option_name__ | e }}" Value="{{ __option_value__ | e }}" />
-          {% endfor %}
-          </Options>
-        decrypt: true
-        dest: "{{ anaconda3_running.install.staging_dir }}\\unattend.xml"
-        force: true
-
-    #endregion --- [ Process: Write The Vendor Answer File ] ---------------------------------- #
-
     #region ------ [ Process: Make Room For The Pinned Version ] ------------------------------ #
     # A VERSION CHANGE, NOT A REMOVAL, AND THE DIFFERENCE IS DELIBERATE. Windows Installer will
     # not lay an older version over a newer one, so a machine ahead of the pin has to give the
@@ -291,9 +267,9 @@
     #endregion --- [ Process: Make Room For The Pinned Version ] ------------------------------ #
 
     #region ------ [ Process: Install Silently From The Verified Copy ] ----------------------- #
-    # An EXE carries no msiexec defaults, and this vendor takes its options from the answer
-    # file written beside it above rather than from the command line, so all that rides here
-    # is the quiet mode. The
+    # An EXE carries no msiexec defaults, so the vendor's silent switches ride in from the
+    # merged configuration. NSIS requires /D last and unquoted, which is why they are one
+    # string rather than a list. The
     # digest is verified on the guest, because that is the copy that executes. The run is
     # bounded so a wedged installer fails inside Ansible rather than hanging the play. 3010 is
     # accepted alongside 0 because it is not a failure: it means the product installed and wants
@@ -308,7 +284,7 @@
       when: __action_required__ | bool
 
       ansible.windows.win_package:
-        arguments: "{{ anaconda3_running.install.mode }}"
+        arguments: "{{ anaconda3_running.install.arguments }}"
         checksum_algorithm: 'sha256'
         checksum: "{{ anaconda3_running.installer.sha256 }}"
         expected_return_code: [ 0, 3010 ]

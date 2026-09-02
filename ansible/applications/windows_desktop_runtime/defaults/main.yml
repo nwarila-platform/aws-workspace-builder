@@ -34,6 +34,22 @@ windows_desktop_runtime_defaults:
 
   #endregion --- [ Install ] ------------------------------------------------------------------ #
 
+  #region ------ [ The version the vendor registers, and the one it should ] ------------------ #
+
+  # THE VENDOR REGISTERS ITS BUNDLE BUILD, NOT ITS PRODUCT VERSION. This runtime's Add/Remove
+  # Programs entry is named 'Microsoft Windows Desktop Runtime - 10.0.11 (x64)' but carries
+  # DisplayVersion '80.44.56884' -- the installer bundle's own build number. The name and the
+  # version disagree, so anything that inventories by version reports a runtime nobody shipped.
+  #
+  # This was invisible while the pin meant 'at or above': 80.44.56884 sorts above 10.0.11, so the
+  # role reported converged for entirely the wrong reason. An exact pin surfaced it immediately.
+  # The registration is post-processed to the product version its own name already claims.
+  version_rewrite:
+    from: '80.44.56884'
+    to: '10.0.11.0'
+
+  #endregion --- [ The version the vendor registers, and the one it should ] ------------------ #
+
   #region ------ [ Product identity ] --------------------------------------------------------- #
 
   # Install state is read from Add/Remove Programs, not from the vendor's own key. The ARP entry
