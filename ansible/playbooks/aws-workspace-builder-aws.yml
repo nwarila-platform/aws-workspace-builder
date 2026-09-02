@@ -638,6 +638,20 @@
             private_ip: "{{ aws_private_ip_address }}"
     #endregion --- [ Roles: Workspace Builder ] ----------------------------------------------- #
 
+    #region ------ [ Roles: AWS CFN Bootstrap ] ----------------------------------------------- #
+    # The artifact is the one AWS documents, and it is an EXE: the .msi under the same prefix is
+    # the abandoned Python-2 line at 1.4.36, older than the AMI carries. The AMI already ships
+    # 2.0.40, so this role reads and proves rather than installs on a current image.
+    - role: 'aws_cfn_bootstrap'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        aws_cfn_bootstrap:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '2.0.40.0'
+            sha256: 'ee40b29e016a7bcb4f1876ea5ec235bcedc8f30363893bb5c9ba2c84a01a7b08'
+    #endregion --- [ Roles: AWS CFN Bootstrap ] ----------------------------------------------- #
+
     #region ------ [ Roles: Amazon CloudWatch Agent ] ----------------------------------------- #
     # The pin is the MSI's own ProductVersion, not the vendor's published build string: this
     # product publishes '1.300072.0b1766' and registers 1.4.37928, and the role compares against
