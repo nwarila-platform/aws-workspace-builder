@@ -163,26 +163,16 @@
     #
     # Failing here means the host is still reachable by the launch key, which makes the rest of
     # the run prove nothing: it would be an ordinary SSH build wearing a WinRM detour.
-    - name: 'SEAL | Prove Port 22 Has Gone Quiet'
-      changed_when: false
-      delegate_to: 'localhost'
-      vars:
-        ansible_connection: 'local'
-        ansible_shell_type: 'sh'
-      when: (state | default('present') | string | lower | trim) != 'absent'
-
-      ansible.builtin.wait_for:
-        connect_timeout: 5
-        delay: 0
-        host: "{{ ansible_host }}"
-        msg: >-
-          Port 22 on {{ ansible_host }} is still answering. The seal did not take, so this run
-          would prove an ordinary SSH build rather than the WorkSpace credential path. Check the
-          deferred removal task on the guest.
-        port: 22
-        sleep: 10
-        state: 'stopped'
-        timeout: 600
+    # THE BUILD PROVES THE SEAL HERE; A RECOVERY MUST NOT. In the build this play opens by waiting
+    # for port 22 to fall silent, because a run that re-entered over a still-open SSH port would
+    # have proven an ordinary SSH build rather than the WorkSpace credential path. That is a
+    # statement about the BUILD's evidence, and it is not a precondition for getting back in.
+    #
+    # A recovery cannot require it. The failures worth recovering from fall on both sides of the
+    # re-entry -- one during the LAPS wait leaves the guest sealed, one during the catalogue
+    # leaves it perfectly reachable -- and a playbook that only worked in the first case would be
+    # useless in the second, which is the case it was written during. WinRM is used either way,
+    # because the listener the domain delivers is there either way.
 
     # Removing the OpenSSH capability is entitled to take C:\ProgramData\ssh with it, and a host
     # key regenerated on re-install is a DIFFERENT key for the same address. The controller

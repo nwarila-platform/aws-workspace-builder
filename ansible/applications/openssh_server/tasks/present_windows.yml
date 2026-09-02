@@ -171,7 +171,25 @@
     # cab as the operator has it and DISM finds it by its package identity, not by a name this
     # role invented. Not no_log: the payload is a public Microsoft package.
 
+    # WHETHER ANY OF THIS IS NEEDED. The capability install below is already idempotent -- DISM
+    # acts only on a capability that is absent -- but the three tasks that carry the payload to
+    # the guest were not, so every converge re-created a directory, re-copied the cab over the
+    # transport and deleted it again, reporting three changes on a host that needed none. On the
+    # re-entry leg that copy crosses WinRM, where it is the slowest step of the play.
+    #
+    # Read once here and gate the whole sequence on it: a host that already has OpenSSH stages
+    # nothing.
+
+    - name: 'PROCESS | Read Whether The Capability Is Already Installed'
+      register: '__openssh_server_present__'
+
+      ansible.windows.win_capability_info:
+        name: [ "{{ openssh_server_running.capability.name }}" ]
+
     - name: 'PROCESS | Ensure The Payload Staging Directory Exists'
+      when: >-
+        (__openssh_server_present__.capabilities | default([])
+         | selectattr('state', 'equalto', 'Installed') | list | length) == 0
 
       ansible.windows.win_file:
         access_time: 'preserve'
@@ -182,6 +200,9 @@
         state: 'directory'
 
     - name: 'PROCESS | Carry The Features On Demand Payload To The Guest'
+      when: >-
+        (__openssh_server_present__.capabilities | default([])
+         | selectattr('state', 'equalto', 'Installed') | list | length) == 0
 
       ansible.windows.win_copy:
         backup: false
@@ -220,6 +241,9 @@
     # package the host no longer needs. The same cleanup the framework's user_data performs.
 
     - name: 'PROCESS | Remove The Staged Payload'
+      when: >-
+        (__openssh_server_present__.capabilities | default([])
+         | selectattr('state', 'equalto', 'Installed') | list | length) == 0
 
       ansible.windows.win_file:
         access_time: 'preserve'
