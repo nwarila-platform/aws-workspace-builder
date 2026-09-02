@@ -248,6 +248,78 @@
           }
           If ($ReArm -eq 0) { $Failures.Add('the Windows rearm count is exhausted') }
 
+          # THE CHECKS BELOW MIRROR AWS'S OWN TEST IMPLEMENTATIONS, read out of the Image
+          # Compatibility Checker's Tests directory rather than inferred from prose. That tool
+          # validates a BYOL import and this deployment is AWS-licensed, so its tests are not
+          # all ours -- but the ones about the state of Windows are the same state, and they are
+          # the ones a page of documentation describes least well.
+          #
+          # DELIBERATELY NOT PORTED, because they are about importing an image rather than
+          # capturing one: VMware tools, GPT partition layout, the BYOL OS/licence requirements,
+          # the PCoIP agent check, the firewall-must-be-off rule, and RestrictedDrive -- which
+          # requires D: to be FREE because a BYOL import has WorkSpaces create the user volume.
+          # Ours is the opposite: D: is the user volume, and this image is built with one.
+
+          # Free space on C:. AWS uses 10 GB, or 20 GB where Office is installed, because Sysprep
+          # and the capture itself need room to work.
+          $OfficeInstalled = $False
+          ForEach ($Root In @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                              'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+            If (-not (Test-Path -LiteralPath:$Root)) { Continue }
+            ForEach ($Key In (Get-ChildItem -LiteralPath:$Root -ErrorAction:'SilentlyContinue')) {
+              $Entry = Get-ItemProperty -LiteralPath:$Key.PSPath -ErrorAction:'SilentlyContinue'
+              If ($Null -eq $Entry) { Continue }
+              $NameProperty = $Entry.PSObject.Properties['DisplayName']
+              If ($Null -ne $NameProperty -and [System.String]$NameProperty.Value -match 'Microsoft (Office|365)') {
+                $OfficeInstalled = $True
+              }
+            }
+          }
+          $MinimumFreeGb = If ($OfficeInstalled) { 20 } Else { 10 }
+          $SystemDisk = Get-CimInstance -ClassName:'Win32_LogicalDisk' -Filter:"DeviceID='C:'" `
+            -ErrorAction:'SilentlyContinue'
+          $FreeGb = 0
+          If ($Null -ne $SystemDisk) { $FreeGb = [System.Math]::Round($SystemDisk.FreeSpace / 1GB, 2) }
+          If ($FreeGb -lt $MinimumFreeGb) {
+            $Failures.Add(('C: has {0} GB free; capture needs {1} GB' -f $FreeGb, $MinimumFreeGb))
+          }
+
+          # Reserved Storage keeps space back for servicing and must be off for a capture.
+          Try {
+            $Reserved = Get-WindowsReservedStorageState -ErrorAction:'Stop'
+            If ([System.String]$Reserved.ReservedStorageState -ne 'Disabled') {
+              $Failures.Add('Windows Reserved Storage is enabled')
+            }
+          } Catch {
+            # Absent on builds that do not implement it, which is the passing state.
+          }
+
+          # Memory Integrity and Credential Guard. Virtualisation-based security cannot survive
+          # the move onto WorkSpaces hardware, and a UEFI-locked one cannot even be turned off
+          # from inside the image -- which is why this is worth catching before capture.
+          $Hvci = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+          If (Test-Path -LiteralPath:$Hvci) {
+            $Item = Get-ItemProperty -LiteralPath:$Hvci -ErrorAction:'SilentlyContinue'
+            $EnabledProperty = $Item.PSObject.Properties['Enabled']
+            If ($Null -ne $EnabledProperty -and [System.Int32]$EnabledProperty.Value -eq 1) {
+              $Failures.Add('Memory Integrity (HVCI) is enabled')
+            }
+          }
+          $Lsa = Get-ItemProperty -LiteralPath:'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' `
+            -ErrorAction:'SilentlyContinue'
+          If ($Null -ne $Lsa) {
+            $LsaProperty = $Lsa.PSObject.Properties['LsaCfgFlags']
+            If ($Null -ne $LsaProperty -and [System.Int32]$LsaProperty.Value -eq 1) {
+              $Failures.Add('Credential Guard is enabled with UEFI lock')
+            }
+          }
+
+          # More than one bootable partition confuses the capture about what it is imaging.
+          $Bootable = @(Get-Partition -ErrorAction:'SilentlyContinue' | Where-Object { $PSItem.IsBoot })
+          If ($Bootable.Count -gt 1) {
+            $Failures.Add(('{0} bootable partitions are present' -f $Bootable.Count))
+          }
+
           # Whether AWS's own validation is even available here.
           $Validation = 'C:\Program Files\Amazon\WorkspacesConfig\scripts\imagePrepValidation.ps1'
 
@@ -255,6 +327,8 @@
           $Ansible.Result = @{
             failures        = $Failures.ToArray()
             is_ready        = ($Failures.Count -eq 0)
+            free_gb         = $FreeGb
+            office          = $OfficeInstalled
             rearm_remaining = $ReArm
             aws_validation  = [System.IO.File]::Exists($Validation)
           }
