@@ -374,8 +374,7 @@
 
   #endregion --- [ Pre-Tasks: Write Down The Name The Directory Knows ] ----------------------- #
 
-  #region ------ [ Pre-Tasks ] ---------------------------------------------------------------- #
-  pre_tasks:
+  #region ------ [ Pre-Tasks: Refuse To Seal What Nothing Can Reach ] ------------------------- #
 
     # THE POINT OF NO RETURN HAS A GATE ON IT. Everything below this play revokes the only
     # credential that currently works, and the only thing that replaces it is an escrow LAPS
@@ -421,7 +420,7 @@
         quiet: true
         that: [ __seal_laps_policy__.result.escrows_to_ad | default(false) | bool ]
 
-  #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
+  #endregion --- [ Pre-Tasks: Refuse To Seal What Nothing Can Reach ] ------------------------- #
 
   #region ------ [ Roles ] -------------------------------------------------------------------- #
   roles:
@@ -471,15 +470,15 @@
     # The role publishes the credential through its registered result and never logs it. The play
     # below reads it out of hostvars on this host.
     - role: 'laps_credential'
-      vars:
-        laps_credential:
-          not_before: >-
-            {{ hostvars[groups['domain_controllers'] | first]['__laps_baseline__'].result.utc }}
       when: (state | default('present') | string | lower | trim) != 'absent'
       vars:
         laps_credential:
           identity: >-
             {{ hostvars[groups['workspace_servers'] | first]['ansible_facts']['netbios_name'] }}
+          # Read from the directory's own clock in play 2, before the guest joined anything, so
+          # an escrow already sitting on a reused computer object is necessarily older than it.
+          not_before: >-
+            {{ hostvars[groups['domain_controllers'] | first]['__laps_baseline__'].result.utc }}
     #endregion --- [ Roles: LAPS Credential ] ------------------------------------------------- #
 
   #endregion --- [ Roles ] -------------------------------------------------------------------- #
