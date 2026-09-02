@@ -2,11 +2,22 @@
 # File: 'ansible/playbooks/aws-workspace-builder-clean.yml'
 # --- [ Description ] ----------------------------------------------------------------------- #
 #
-# PREPARES A CONVERGED STAND-IN FOR IMAGE CAPTURE. The build playbook leaves a working desktop;
-# this one leaves something WorkSpaces will accept as an image, which is not the same machine.
-# AWS's Image Checker refuses a capture whose services are in the state a running desktop needs,
-# so the last thing done before capture is to give those up -- deliberately, in a run of its own,
-# after the build has been proven.
+# REHEARSES CAPTURE PREPARATION. The build playbook leaves a working desktop; this one gives up
+# the state that must not be captured. AWS's Image Checker refuses a capture whose services are in
+# the state a running desktop needs, so this is done deliberately, in a run of its own, after the
+# build has been proven.
+#
+# WHAT THIS PLAYBOOK IS FOR, AND WHAT IT IS NOT. CreateWorkspaceImage takes a WorkspaceId; it
+# cannot capture an EC2 instance, and the stand-in carries none of the WorkSpaces agents a real
+# desktop has. So running this against the stand-in does not produce an image and is not meant to:
+# it proves the preparation is correct and idempotent, cheaply, on a machine we can destroy. The
+# same playbook is what runs against a real WorkSpace, where the capture actually happens.
+#
+# That split is the whole method of this repository. Where a behaviour can be proven on EC2, it is
+# proven there before it is trusted. Where it cannot -- anything that needs the WorkSpaces agents,
+# the management interface, or the service's own capture path -- the code is written from AWS's
+# documentation and is marked as documentation-derived rather than proven, so nobody mistakes a
+# careful reading for a passing test.
 #
 # WHY A SEPARATE PLAYBOOK RATHER THAN A FLAG ON THE BUILD. The clean state is destructive to the
 # running machine's usefulness: it stops the agent that manages it. Running it as part of the
@@ -28,6 +39,26 @@
 - name: 'PLAY | Prepare The Stand-In For Image Capture'
   hosts: 'workspace_servers'
   any_errors_fatal: true
+
+  #region ------ [ Pre-Tasks ] ---------------------------------------------------------------- #
+  pre_tasks:
+
+    # EXTRA VARS OUTRANK EVERYTHING, INCLUDING THE STATE EACH ROLE BELOW ASKS FOR. The roles here
+    # request 'clean' as a role parameter, and a '-e state=present' copied from the build
+    # playbook's invocation would silently outrank all of them -- turning a capture preparation
+    # into an install run, on the machine about to be captured, with nothing in the output saying
+    # so. Refusing is the only safe answer: this playbook has exactly one state.
+    - name: 'PRE | Refuse A State Passed On The Command Line'
+      ansible.builtin.assert:
+        fail_msg: >-
+          This playbook prepares a host for capture and takes no 'state' on the command line;
+          each role below requests 'clean' itself. An extra variable outranks a role parameter,
+          so '-e state={{ state | default('') }}' would override every one of them. Re-run
+          without it.
+        quiet: true
+        that: [ state is not defined or (state | string | lower | trim) == 'clean' ]
+
+  #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
 
   #region ------ [ Roles ] -------------------------------------------------------------------- #
   roles:

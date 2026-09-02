@@ -209,7 +209,29 @@
     # Nothing here waits for the result. Port 22 falling silent is the proof, and the playbook
     # waits for that from the controller -- which is the same thing a person would check.
 
+    # WHETHER THERE IS ANYTHING LEFT TO SEAL. The scheduled task below deletes itself when it
+    # fires, so a later run finds no task, registers it again, and its registration trigger fires
+    # it again -- stripping SSH from a host that was already converged. Re-running the build must
+    # not un-build it, so the seal is gated on the capability still being present: on a sealed
+    # host this reads absent, nothing is scheduled, and the run is a no-op rather than a relapse.
+    - name: 'END | Read Whether OpenSSH Is Still Installed'
+      register: '__workspace_baseline_capability__'
+
+      ansible.windows.win_powershell:
+        depth: 2
+        error_action: 'stop'
+        parameters:
+          Name: "{{ workspace_baseline_running.ssh.capability_name }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String]$Name)
+          $Capability = Get-WindowsCapability -Online -Name:$Name -ErrorAction:'SilentlyContinue'
+          $State = If ($Null -eq $Capability) { 'absent' } Else { [System.String]$Capability.State }
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ installed = ($State -eq 'Installed'); state = $State }
+
     - name: 'END | Schedule The Deferred OpenSSH Removal'
+      when: __workspace_baseline_capability__.result.installed | default(false) | bool
       vars:
         __removal_command__: >-
           Stop-Service -Name 'sshd' -Force -ErrorAction SilentlyContinue;
