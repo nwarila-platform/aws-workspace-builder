@@ -1,0 +1,47 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the laps_credential role. The v3 loader merges the OS
+# overlay in vars/ over this map and publishes the result as 'laps_credential_running'; tasks read
+# only the merged map, never these keys directly.
+#
+# THIS ROLE RUNS ON A DOMAIN CONTROLLER, not on the host being built. Windows LAPS escrows the
+# password on the computer object in Active Directory, and Get-LapsADPassword reads it from the
+# directory — so the read happens where the directory is.
+#
+# WHAT BELONGS HERE: the wait budget, which is a property of how LAPS works rather than of any
+# one deployment.
+#
+# WHAT DOES NOT: the identity. Which machine is being waited on is decided per run, by the
+# playbook, from the name the guest was actually joined under — a value no default could know.
+#
+# =========================================================================================== #
+---
+laps_credential_defaults:
+
+  #region ------ [ Identity ] ------------------------------------------------------------------ #
+
+  # The computer object to read, by its sAMAccountName without the trailing '$'. Empty on purpose:
+  # tasks/validate.yml refuses an empty one, so a play that forgot to supply it fails on the
+  # controller in a second rather than waiting two hours for a machine that was never named.
+  identity: ''
+
+  #endregion --- [ Identity ] ------------------------------------------------------------------ #
+
+  #region ------ [ Wait ] ---------------------------------------------------------------------- #
+
+  # HOW LONG THIS IS ALLOWED TO TAKE. Nothing in this play triggers the escrow: the LAPS policy
+  # arrives by Group Policy and Windows LAPS processes it on its own background cycle, so the
+  # credential appears when the guest gets round to it. The default budget is two hours
+  # (120 attempts, 60 seconds apart), which comfortably covers a 90-minute Group Policy refresh
+  # interval plus the LAPS processing that follows it.
+  #
+  # A host whose domain does not carry the LAPS GPO will never escrow anything and will burn the
+  # whole budget before failing. That is the case 'laps_policy_source: local' exists for — see
+  # the playbook, which then runs the laps_admin role to write the policy on the guest itself.
+  wait:
+    attempts: 120
+    delay_seconds: 60
+
+  #endregion --- [ Wait ] ---------------------------------------------------------------------- #

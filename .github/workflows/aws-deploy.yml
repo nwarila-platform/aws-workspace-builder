@@ -1,21 +1,29 @@
 # =========================================================================================== #
 # AWS Deploy — aws-workspace-builder
 # ------------------------------------------------------------------------------------------- #
-# Ephemeral lifecycle: terraform init/apply -> ansible -> terraform destroy on the normal path.
-# Terraform is DATA-ONLY here (a plain tfvars, no .tf files); resources live in the pinned
-# aws-terraform-framework, configuration in the pinned ansible-framework + this repo's role.
+# LAUNCH-ONLY lifecycle: terraform init/apply -> hold -> terraform destroy. Terraform is
+# DATA-ONLY here (a plain tfvars, no .tf files); resources live in the pinned
+# aws-terraform-framework.
+#
+# THIS WORKFLOW DOES NOT CONVERGE THE GUEST, AND THAT IS DELIBERATE. The playbook seals the
+# instance against every credential it holds and then reads the Windows LAPS escrow from a domain
+# controller on the private network — an address this runner has no route to, and one no CI
+# ingress rule can create. So CI does the half it can do from the internet (launch the instance,
+# hold it, destroy it) and an operator on the LAN runs the playbook against it. The handoff step
+# prints the exact command in the job summary.
 #
 #   * AWS credentials are issued only to this workflow at refs/heads/main. Pull requests use
 #     the credential-free quality workflow; feature-branch workflow code never reaches AWS.
-#   * Reachability: direct SSH to a subnet-assigned public IPv4. At runtime the framework adds
-#     one run-scoped security group to every interface, sourced from the runner's validated
-#     public IPv4 and, when an operator hostname is configured, from the address it resolves to
-#     as well — that one adding RDP, so a person can work on a held host. This configuration
-#     creates no EIP and has no NAT. The playbook performs the bounded direct-SSH readiness
-#     check because readiness_gate remains disabled.
+#   * Reachability: direct SSH and WinRM to a subnet-assigned public IPv4. At runtime the
+#     framework adds one run-scoped security group to every interface, sourced from the runner's
+#     validated public IPv4 and, when an operator hostname is configured, from the address it
+#     resolves to as well — that one adding RDP. THE OPERATOR ADDRESS IS NOW LOAD-BEARING, not a
+#     debugging convenience: it is the address the converge arrives from, so a dispatch that asks
+#     for a hold and resolves no operator address is refused rather than launching a host nobody
+#     can reach. This configuration creates no EIP and has no NAT.
 #   * AWS credentials are exchanged before provisioning and refreshed before eligible teardown.
-#     The initial 7,800-second session covers normal deployment work; the teardown refresh uses a
-#     modest 3,600-second session so long holds do not reach destroy with expired credentials.
+#     The initial 7,800-second session covers the launch; the teardown refresh uses a modest
+#     3,600-second session so long holds do not reach destroy with expired credentials.
 #     The 330-minute job budget includes a four-hour hold plus measured-path margin and stays below
 #     the runner's 360-minute execution limit. It is not a teardown guarantee: abnormal delay can
 #     exhaust the job budget before destroy and strand paid resources. That risk is accepted for
@@ -23,8 +31,10 @@
 #   * One fixed state key; this workflow's concurrency group prevents overlapping applies and
 #     never cancels a live lifecycle. A later lifecycle can clean predecessor state before apply;
 #     no age-gated reaper exists for a run killed before destroy.
-#   * Protected-main pushes prove immediately; an off-minute weekly schedule proves recurrence.
-#     One durable incident is updated on failure and closed after the next successful lifecycle.
+#   * Protected-main pushes and the weekly schedule run with hold_minutes 0: they prove the
+#     LAUNCH LIFECYCLE — apply, tag, destroy — and nothing about the guest, because no operator is
+#     waiting to converge one. One durable incident is updated on failure and closed after the
+#     next successful lifecycle.
 # =========================================================================================== #
 name: AWS Deploy
 
@@ -32,10 +42,10 @@ name: AWS Deploy
   workflow_dispatch:
     inputs:
       hold_minutes:
-        description: Hold the converged guest before teardown
+        description: How long to hold the launched guest for the local converge
         type: choice
         options: [ '0', '15', '60', '120', '240' ]
-        default: '0'
+        default: '240'
   push:
     branches: [ main ]
   schedule:
@@ -66,7 +76,7 @@ jobs:
           fi
 
   aws-deploy:
-    name: AWS (ephemeral deploy-test-destroy)
+    name: AWS (ephemeral launch-hold-destroy)
     needs: main-ref
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -102,30 +112,39 @@ jobs:
               ;;
           esac
 
-      - name: Set up pinned Python
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
-        with:
-          python-version: '3.12.11'
-          cache: pip
-          cache-dependency-path: requirements-quality.txt
-
-      - name: Install Ansible
+      # A hold exists so an operator can converge the guest from the LAN, and the ONLY ingress
+      # that operator has is the one the framework builds from debug_ip. Without the secret there
+      # is no such rule, so the hold would keep a host alive that nobody can reach for as long as
+      # four hours. Refuse at the top of the job, before anything is created.
+      #
+      # hold_minutes 0 is exempt: that is the launch lifecycle proof, which converges nothing and
+      # is what the push and schedule triggers run.
+      - name: Require an operator address for a held run
+        if: github.event_name == 'workflow_dispatch' && inputs.hold_minutes != '0'
         env:
-          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+          DEBUG_HOSTNAME: ${{ secrets.AWS_DEBUG_HOSTNAME }}
         run: |
           set -euo pipefail
-          runtime_venv="${RUNNER_TEMP}/aws-proof-venv"
-          python3 -m venv "${runtime_venv}"
-          "${runtime_venv}/bin/python" -m pip install --quiet --no-cache-dir \
-            --requirement requirements-quality.txt
-          "${runtime_venv}/bin/ansible-galaxy" collection install --force \
-            --requirements-file requirements-quality.yml
-          echo "${runtime_venv}/bin" >> "${GITHUB_PATH}"
+          if [ -z "${DEBUG_HOSTNAME}" ]; then
+            echo "::error::hold_minutes is not 0, but no AWS_DEBUG_HOSTNAME secret is configured." \
+                 "The hold exists so an operator on the LAN can run the playbook against this host," \
+                 "and the framework's debug_ip rule is the only ingress that operator gets." \
+                 "Configure the secret, or dispatch with hold_minutes 0 for a launch-only proof."
+            exit 1
+          fi
+          echo 'operator hostname is configured'
 
       # The framework consumes a pre-existing key pair and never creates one, so the standing
       # account key pair named in terraform/aws.tfvars is the launch key. Windows user_data
-      # installs its public half by reading IMDS; only the private half is secret, and it
-      # exists solely in this runner's temporary directory, mode 0600, for this one job.
+      # installs its public half by reading IMDS.
+      #
+      # NOTHING IN THIS JOB CONNECTS WITH IT ANY MORE — the converge is local. The private half is
+      # staged solely to derive its public half for the assertion two steps down, which is what
+      # catches a rotated secret that no longer matches the launch key pair. That check still
+      # belongs here: the operator's copy of the same key is what the local converge logs in with,
+      # so a mismatch found at launch is a mismatch found before anyone waits on it. The file
+      # exists in this runner's temporary directory, mode 0600, for this one job, and is removed
+      # at the end of it.
       - name: Stage the launch private key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.AWS_EC2_SSH_PRIVATE_KEY }}
@@ -168,7 +187,7 @@ jobs:
           fi
           echo "staged key matches ${CI_KEY_NAME}"
 
-      - name: Read framework pins
+      - name: Read the terraform framework pin
         id: pins
         run: |
           set -euo pipefail
@@ -187,11 +206,11 @@ jobs:
             }
             printf '%s=%s\n' "${name}" "${pin}" >> "${GITHUB_OUTPUT}"
           }
-          # The ansible-framework pin is the single .github/ansible-framework-pin, read by BOTH this workflow
-          # and scripts/compose-and-run.sh, so local and CI can never diverge. The terraform pin
-          # stays under .github/ because only CI consumes terraform.
+          # Only the terraform pin is consumed here: this workflow launches infrastructure and
+          # converges nothing, so it never checks out ansible-framework. The ansible pin is still
+          # validated on every change by the quality workflow, and read at converge time by
+          # scripts/compose-and-run.sh on the operator's workstation.
           emit_pin terraform .github/terraform-framework-pin
-          emit_pin ansible .github/ansible-framework-pin
 
       - name: Checkout aws-terraform-framework (pinned)
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -199,14 +218,6 @@ jobs:
           repository: ${{ github.repository_owner }}/aws-terraform-framework
           ref: ${{ steps.pins.outputs.terraform }}
           path: .frameworks/aws-terraform-framework
-          persist-credentials: false
-
-      - name: Checkout ansible-framework (pinned)
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          repository: ${{ github.repository_owner }}/ansible-framework
-          ref: ${{ steps.pins.outputs.ansible }}
-          path: .frameworks/ansible-framework
           persist-credentials: false
 
       - name: Setup Terraform
@@ -236,9 +247,11 @@ jobs:
       # records is the operator it belongs to.
       #
       # Absent secret means no operator access, not a failed run: the framework's debug_ip is
-      # optional and a pipeline with nobody watching should grant nobody anything. A name that
-      # is set and will not resolve DOES fail, because the alternative is a host that silently
-      # cannot be reached by the person who asked for it.
+      # optional and a pipeline with nobody watching should grant nobody anything. That is the
+      # launch-only path (hold_minutes 0); a HELD run was already refused above, because for one
+      # of those this address is the whole point. A name that is set and will not resolve DOES
+      # fail, because the alternative is a host that silently cannot be reached by the person who
+      # asked for it.
       - name: Resolve the operator address for direct access
         env:
           DEBUG_HOSTNAME: ${{ secrets.AWS_DEBUG_HOSTNAME }}
@@ -282,6 +295,7 @@ jobs:
         timeout-minutes: 15
         working-directory: .frameworks/aws-terraform-framework/terraform
         env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
           GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
@@ -293,15 +307,25 @@ jobs:
             -var "repository_id=${GITHUB_REPOSITORY_ID}"                     \
             -var "run_id=${GITHUB_RUN_ID}"                                   \
             -var "runner_ip=${RUNNER_IP}"                                    \
+            -var "windows_fod_source={bucket=\"${AWS_ACCOUNT_ID}-apprepo\",region=\"${AWS_REGION}\",key_prefix=\"fod\"}" \
             ${DEBUG_IP:+-var "debug_ip=${DEBUG_IP}"}
 
       # The value file comes FIRST and the identity flags after it. Terraform resolves repeated
       # command-line assignments in the order they are given, so this ordering -- not the kind of
       # flag -- is what stops the file from renaming who this fresh deployment says it is.
+      #
+      # windows_fod_source is a flag rather than a tfvars value because the bucket's name carries
+      # the account id, which the public value file must not. The Server 2022 image ships without
+      # the OpenSSH.Server capability; the framework's user_data installs it at boot from the cab
+      # staged at fod/20348/ in the account's application repository bucket, which the instance
+      # profile in aws.tfvars already reads. Every terraform invocation passes the same object so
+      # the configuration they evaluate is the same one.
       - name: Terraform apply
         id: tf-apply
         timeout-minutes: 15
         working-directory: .frameworks/aws-terraform-framework/terraform
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           terraform apply -input=false -auto-approve -lock-timeout=120s      \
@@ -312,63 +336,66 @@ jobs:
             -var "repository_id=${GITHUB_REPOSITORY_ID}"                     \
             -var "run_id=${GITHUB_RUN_ID}"                                   \
             -var "runner_ip=${RUNNER_IP}"                                    \
+            -var "windows_fod_source={bucket=\"${AWS_ACCOUNT_ID}-apprepo\",region=\"${AWS_REGION}\",key_prefix=\"fod\"}" \
             ${DEBUG_IP:+-var "debug_ip=${DEBUG_IP}"}
 
-      # This repo's roles overlay onto the pinned framework tree. A framework-TRACKED role
-      # path is refused so an overlay can never replace framework-owned code.
-      - name: Compose the Ansible tree
-        run: |
-          set -euo pipefail
-          # A role that runs a first-class PowerShell script tracks only files/<Name>.ps1.stub;
-          # the script itself is developed and pair-tested under scripts/ and copied into place
-          # here. This must precede the rsync below, which is what carries the materialized copy
-          # into the composed tree.
-          bash "${GITHUB_WORKSPACE}/scripts/materialize-role-scripts.sh"
-
-          framework_dir="${GITHUB_WORKSPACE}/.frameworks/ansible-framework"
-
-          # The framework's own roles track only files/<Name>.ps1.stub. Materialize them in the
-          # checkout before the overlay: that materializer validates every stub it finds, and this
-          # repository's roles resolve their sources from this repository, not from the framework.
-          if [ -x "${framework_dir}/scripts/materialize-role-scripts.sh" ]; then
-            (cd "${framework_dir}" && ./scripts/materialize-role-scripts.sh)
-          fi
-
-          for role_source in "${GITHUB_WORKSPACE}"/ansible/applications/*; do
-            role_name="$(basename "${role_source}")"
-            [ -f "${role_source}/tasks/main.yml" ] || { echo "!! missing tasks/main.yml in ${role_source}" >&2; exit 1; }
-            [ -z "$(git -C "${framework_dir}" ls-files -- "applications/${role_name}/")" ] \
-              || { echo "!! refusing framework-tracked role path applications/${role_name}" >&2; exit 1; }
-            rsync -a --delete "${role_source}/" "${framework_dir}/applications/${role_name}/"
-          done
-
-      # Readiness, configuration and the application proof all live in the playbook. The EC2
-      # inventory plugin filters live AWS instances to this repository and run before exposing
-      # one target. The budget guards against a hung converge without cutting a working one short.
-      - name: Run the application playbook
-        timeout-minutes: 60
-        working-directory: .frameworks/ansible-framework
+      # THE HANDOFF. Everything up to here is what CI can do from the internet. The converge runs
+      # on an operator workstation on the LAN, because the playbook reads the Windows LAPS escrow
+      # from a domain controller at a private address — so the job summary carries the exact
+      # invocation rather than leaving it to be reconstructed from a README under time pressure.
+      #
+      # The three GITHUB_* values are not decoration: the dynamic inventory reads them from the
+      # ENVIRONMENT to select this run's instance, and a lookup('env') has no command-line
+      # equivalent. Written into the summary, never echoed to the log with the account id, which
+      # is a secret in this repository and is left as a placeholder for the operator to supply.
+      - name: Publish the local converge handoff
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.hold_minutes != '0' &&
+          steps.tf-apply.outcome == 'success'
         env:
-          ANSIBLE_CONFIG: ${{ github.workspace }}/.frameworks/ansible-framework/ansible.cfg
-          # A secret reaches the shell through the environment, never by substitution into the
-          # script text, so its value cannot be read as shell syntax. Forwarded on as an
-          # extra-var below because the play requires it; same value the OIDC role ARN uses.
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          # NOT extra-vars: the dynamic inventory reads these from the environment to pick this
-          # run's instance, and a lookup('env') has no command-line equivalent.
           GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
+          HOLD_MINUTES: ${{ inputs.hold_minutes }}
         run: |
           set -euo pipefail
-          # Dynamic inventory publishes an instance attribute named state; extra-vars take precedence.
-          ansible-playbook "${GITHUB_WORKSPACE}/ansible/playbooks/aws-workspace-builder-aws.yml" \
-            --extra-vars aws_account_id="${AWS_ACCOUNT_ID}"                    \
-            --extra-vars aws_region="${AWS_REGION}"                            \
-            --extra-vars env=test                                              \
-            --extra-vars state=present                                         \
-            --inventory "${GITHUB_WORKSPACE}/ansible/inventory/aws_ec2.yml"
+          {
+            echo '## Converge this instance from the LAN'
+            echo
+            echo "The instance is up and held for ${HOLD_MINUTES} minutes. This runner does not"
+            echo 'converge it: the playbook reads the Windows LAPS escrow from a domain controller'
+            echo 'on the private network, which no CI ingress rule can reach. Run this from an'
+            echo 'operator workstation on that network, in a checkout of this repository:'
+            echo
+            echo '```bash'
+            echo "export GITHUB_REPOSITORY_ID='${GITHUB_REPOSITORY_ID}'"
+            echo "export GITHUB_RUN_ID='${GITHUB_RUN_ID}'"
+            echo "export GITHUB_REPOSITORY='${GITHUB_REPOSITORY}'"
+            echo "export ENVIRONMENT='test'"
+            echo
+            echo 'scripts/compose-and-run.sh \'
+            echo '  -i "${PWD}/ansible/inventory/domain_controllers.yml" \'
+            echo '  -e aws_account_id=<the deployment account id> \'
+            echo "  -e aws_region='${AWS_REGION}' \\"
+            echo '  -e openssh_payload=<ABSOLUTE path of OpenSSH-Server-Package~31bf3856ad364e35~amd64~~.cab> \'
+            echo '  -e env=test \'
+            echo '  -e state=present'
+            echo '```'
+            echo
+            echo 'The run takes as long as Windows LAPS takes to escrow a credential — up to two'
+            echo 'hours of that is one silent task, by design. Add'
+            echo '`-e laps_policy_source=local` if the domain carries no Windows LAPS GPO.'
+            echo
+            echo 'openssh_payload is the Windows Server 2022 OpenSSH server Features on Demand cab,'
+            echo 'kept on the workstation: the playbook carries it to the sealed guest over WinRM'
+            echo 'because a domain-joined host behind update policy cannot fetch it from Windows'
+            echo 'Update. The path must be absolute -- the composer runs from the framework'
+            echo 'checkout, so a relative one would resolve somewhere you never see.'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Hold the converged guest for interactive work
+      # The window the local converge runs in. Nothing here watches it: the operator's own
+      # ansible-playbook is the progress report, and this loop only keeps the instance alive and
+      # the job's teardown pending. Heartbeats every five minutes so the run does not look hung.
+      - name: Hold the launched guest for the local converge
         if: >-
           !cancelled() &&
           github.event_name == 'workflow_dispatch' &&
@@ -421,6 +448,7 @@ jobs:
         timeout-minutes: 15
         working-directory: .frameworks/aws-terraform-framework/terraform
         env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
           GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
@@ -432,6 +460,7 @@ jobs:
             -var "repository_id=${GITHUB_REPOSITORY_ID}"                     \
             -var "run_id=${GITHUB_RUN_ID}"                                   \
             -var "runner_ip=${RUNNER_IP}"                                    \
+            -var "windows_fod_source={bucket=\"${AWS_ACCOUNT_ID}-apprepo\",region=\"${AWS_REGION}\",key_prefix=\"fod\"}" \
             ${DEBUG_IP:+-var "debug_ip=${DEBUG_IP}"}
 
       - name: Remove the ephemeral private key

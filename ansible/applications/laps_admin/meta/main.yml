@@ -1,0 +1,38 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for laps_admin. Description-only (style guide 8): NOT an enforcing argument
+# spec. The role's tasks/validate.yml enforces its merged-config guards.
+#
+# OPTIONAL INPUTS — fully defaulted; a site overrides them in its playbook.
+#
+#   laps_admin.policy.password_length      Generated password length (8-64, default 24).
+#   laps_admin.policy.password_complexity  LAPS complexity class 1-4 (default 4, full set).
+#   laps_admin.policy.password_age_days    Rotation age in days (1-365, default 30).
+#
+# DELIBERATELY NOT OFFERED: the managed account (unset targets the built-in RID-500
+# Administrator by well-known SID) and the escrow directory (Active Directory, written
+# literally as a design invariant).
+#
+# No password crosses Ansible in either direction: LAPS generates on the guest and escrows to
+# the computer object; administrators read it back with Get-LapsADPassword.
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'laps_admin'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    Hands the built-in Administrator to Windows LAPS with Active Directory as the escrow:
+    converges the LAPS policy registry, triggers policy processing only when a value moved, and
+    proves the policy landed verbatim. The processing pass generates the RID-500 password on
+    the guest and escrows it to the domain controller; no credential ever crosses Ansible.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'laps', 'security', 'credentials']
+
+dependencies: []

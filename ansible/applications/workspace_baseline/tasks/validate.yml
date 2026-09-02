@@ -1,0 +1,58 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/validate.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Validates the merged workspace_baseline configuration after the v3 loader merge, on the
+# CONTROLLER, before anything touches the guest.
+#
+# This role is the one that makes the host unreachable on purpose. A malformed value here does
+# not produce a failed task, it produces a host with neither transport — so the shapes are
+# checked while the run still costs nothing, rather than discovered after the door is shut.
+#
+# meta/main.yml describes these inputs; this file is what enforces them.
+#
+# =========================================================================================== #
+---
+- name: 'VALIDATE | Require A Reachable WinRM Opening'
+  ansible.builtin.assert:
+    that:
+      - workspace_baseline_running.winrm.service_name | default('') | length > 0
+      - workspace_baseline_running.winrm.port | int > 0
+      - workspace_baseline_running.winrm.port | int < 65536
+      - workspace_baseline_running.winrm.listener_timeout_seconds | int > 0
+      - workspace_baseline_running.winrm.reachability_timeout_seconds | int > 0
+    fail_msg: >-
+      Refusing to continue: winrm.service_name must name the service that publishes the listener,
+      winrm.port must be a real TCP port, and winrm.listener_timeout_seconds and
+      winrm.reachability_timeout_seconds must both be positive. These are the ONLY way back into
+      this host once the launch key is revoked, and an unbounded wait for a listener the domain
+      never delivers is a hung run, not a patient one.
+    quiet: true
+
+- name: 'VALIDATE | Require The Launch-Key Surface This Role Revokes'
+  ansible.builtin.assert:
+    that:
+      - workspace_baseline_running.ssh.authorized_keys_path is match('^[A-Za-z]:\\\\')
+      - workspace_baseline_running.ssh.firewall_rule_name | default('') | length > 0
+      - workspace_baseline_running.ssh.capability_name is match('^[A-Za-z0-9.]+~[A-Za-z0-9.]*~[A-Za-z0-9.]*~[A-Za-z0-9.-]*~[0-9.]+$')
+    fail_msg: >-
+      Refusing to seal the host: ssh.authorized_keys_path must be an absolute, drive-letter-rooted
+      Windows path, ssh.firewall_rule_name must name the rule user_data created, and
+      ssh.capability_name must be a DISM capability identity of the form Name~~~~Version. A
+      mistyped path revokes nothing while reporting success.
+    quiet: true
+
+- name: 'VALIDATE | Require A Deferred Removal The Scheduler Will Accept'
+  ansible.builtin.assert:
+    that:
+      - workspace_baseline_running.removal_task.name is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+      - workspace_baseline_running.removal_task.delay is match('^PT([0-9]+M)?([0-9]+S)?$')
+      - workspace_baseline_running.removal_task.delay != 'PT'
+      - workspace_baseline_running.removal_task.path is match('^\\\\')
+    fail_msg: >-
+      Refusing to schedule the removal: removal_task.name must be a plain scheduler-safe name,
+      removal_task.path must be a scheduler folder path beginning with a backslash, and
+      removal_task.delay must be an ISO 8601 duration in minutes and/or seconds (for example
+      PT3M). The delay is what lets this play disconnect before OpenSSH is uninstalled from
+      under it.
+    quiet: true

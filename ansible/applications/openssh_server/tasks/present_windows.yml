@@ -1,0 +1,443 @@
+# ============================================================================================= #
+# File: '{{ role_path }}/tasks/present_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Gives a sealed host its SSH transport back: carries the OpenSSH server capability's payload to
+# the guest and installs it, installs the operator's public key from the account's ansible
+# bucket, and opens the port. It is the deliberate reverse of workspace_baseline, and the two are
+# a matched pair.
+#
+# THIS RUNS OVER WinRM, AS THE LAPS ADMINISTRATOR. At the moment it starts, the guest has no
+# OpenSSH, no authorized key and no port 22 — so nothing here may assume SSH, and nothing here may
+# assume a credential other than the one Active Directory escrowed. That is the whole exercise: a
+# production WorkSpace offers exactly this and nothing more, and the build has to work with it.
+#
+# THE PAYLOAD COMES FROM THE CONTROLLER, NOT FROM WINDOWS UPDATE. The image carries the
+# capability's metadata but not its payload, and a domain-joined host behind update policy is
+# refused the payload from Windows Update -- which is exactly the host a WorkSpace is. So the cab
+# crosses the same session that is running this role and DISM is told not to look anywhere else.
+# The guest receives a file, never a credential to fetch one with.
+#
+# THE KEY COMES FROM S3, BY WAY OF THE CONTROLLER. A real WorkSpace was never launched with a key
+# pair, so there is no metadata answer on the guest's side to read one from; the operator's
+# public key is an object in the account's ansible bucket, fetched by the controller with its own
+# credentials and verified against a pinned digest before it is written -- the same shape
+# domain_member gives its join password and remote_client its profile. The guest receives the
+# key's bytes over the session running this role, never a credential to fetch them with. The
+# fetch is not no_log: a public key is public, and a failed fetch is worth reading in full.
+#
+# BEGIN reads -- first the logon this session holds, then the key. PROCESS restores. END proves
+# the way back in from the CONTROLLER, because a host that answers itself proves nothing about a
+# security group, and this is the transport every remaining play in the build depends on.
+#
+# ============================================================================================= #
+---
+#region ------ [ Begin: Read The Logon And The Key This Host Is Given Back ] ------------------ #
+
+- name: 'BEGIN | Read The Logon And The Key This Host Is Given Back'
+
+  # Begin The 'Begin' Block
+  block:
+
+    #region ------ [ Begin: Prove The Logon Can Do This ] ------------------------------------- #
+    # A connection that answers is not a session that can install a capability. Over the network
+    # a local administrator's token is FILTERED to a standard user's unless the domain says
+    # otherwise (LocalAccountTokenFilterPolicy = 1, or Admin Approval Mode left off for the
+    # built-in Administrator), and DISM refuses a network logon outright, so win_capability runs
+    # the install through a batch logon of the same account -- which is a second right the domain
+    # can withhold. Both are read from the token itself, before anything is staged, so a domain
+    # that delivered the listener but not the rights is named here in a second rather than as a
+    # DISM error after the payload has crossed.
+    #
+    # The label is compared by SID, which does not change with the display language.
+
+    - name: 'BEGIN | Read The Logon This Session Holds'
+      changed_when: false
+      register: '__openssh_server_logon__'
+
+      ansible.windows.win_whoami:
+
+    - name: 'BEGIN | Prove The Logon Is Elevated And May Run A Batch Job'
+      ansible.builtin.assert:
+        fail_msg: >-
+          Refusing to continue as
+          '{{ __openssh_server_logon__.account.domain_name | default("") }}\{{
+          __openssh_server_logon__.account.account_name | default("") }}': the session runs at
+          '{{ __openssh_server_logon__.label.account_name | default("an unknown integrity") }}'
+          with logon rights [{{ __openssh_server_logon__.rights | default([]) | join(', ') }}].
+          Installing the capability needs a High integrity token and the right to log on as a
+          batch job. A Medium token means the domain filters local administrators over the network
+          (LocalAccountTokenFilterPolicy is 0, or Admin Approval Mode is on for the built-in
+          Administrator); a missing SeBatchLogonRight, or a present SeDenyBatchLogonRight, means
+          'Log on as a batch job' was taken from Administrators, or denied to local accounts.
+        quiet: true
+        that:
+          - __openssh_server_logon__.label.sid | default('') in ['S-1-16-12288', 'S-1-16-16384']
+          - "'SeBatchLogonRight' in (__openssh_server_logon__.rights | default([]))"
+          - "'SeDenyBatchLogonRight' not in (__openssh_server_logon__.rights | default([]))"
+
+    #endregion --- [ Begin: Prove The Logon Can Do This ] ------------------------------------- #
+
+    #region ------ [ Begin: Fetch The Operator's Public Key ] --------------------------------- #
+    # On the CONTROLLER, with the controller's own AWS credentials: the guest is never handed a
+    # way to read the bucket. become is off because the controller connection has no privilege to
+    # escalate; check_mode is off because a read that changes nothing is what lets check mode
+    # verify the digest; changed_when is false for the same reason. Not no_log: the object is a
+    # public key, and a fetch that fails is worth reading in full -- the bucket, the object and
+    # the denial, rather than a censored line pointing at nothing.
+    #
+    # The connection and shell are pinned in task vars because this role runs in a play whose
+    # WinRM transport is declared as PLAY vars, and those reach a delegated task too -- outranking
+    # the implicit localhost's own local connection. Task vars are the one scope that outranks
+    # them; without these two lines the fetch would try NTLM against localhost:5985.
+
+    - name: 'BEGIN | Fetch The Operator Public Key From The Ansible Bucket'
+      become: false
+      changed_when: false
+      check_mode: false
+      delegate_to: 'localhost'
+      register: '__openssh_server_key_object__'
+      vars:
+        ansible_connection: 'local'
+        ansible_shell_type: 'sh'
+
+      amazon.aws.s3_object:
+        bucket: "{{ openssh_server_running.authorized_key.bucket }}"
+        ceph: false
+        debug_botocore_endpoint_logs: false
+        dualstack: false
+        encrypt: true
+        encryption_mode: 'AES256'
+        expiry: 600
+        ignore_nonexistent_bucket: true
+        mode: 'getstr'
+        object: "{{ openssh_server_running.authorized_key.object }}"
+        overwrite: 'different'
+        permission: [ 'private' ]
+        prefix: ''
+        purge_tags: true
+        retries: 0
+        sig_v4: true
+        validate_bucket_name: true
+        validate_certs: true
+
+    #endregion --- [ Begin: Fetch The Operator's Public Key ] --------------------------------- #
+
+    #region ------ [ Begin: Refuse A Key That Is Not The Pinned One ] ------------------------- #
+    # The object is trusted only once it matches the digest pinned in the role. Which key opens
+    # every host this role restores is exactly what a bucket write must not be able to change
+    # unnoticed, so a mismatch is refused here rather than installed and discovered as a login
+    # that should not have worked. The shape check is separate so its failure names the cause:
+    # an object that is not an OpenSSH public key at all would otherwise be written to disk and
+    # rejected by sshd hours later, as a login failure with no cause attached.
+
+    - name: 'BEGIN | Verify The Operator Public Key Digest'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The public key object '{{ openssh_server_running.authorized_key.object }}' in bucket
+          '{{ openssh_server_running.authorized_key.bucket }}' does not match the digest pinned in
+          the role ({{ openssh_server_running.authorized_key.sha256 }}). Refusing to install it:
+          either the object was replaced without the pin, or the pin was changed without the
+          object. Rotate them together.
+        quiet: true
+        that:
+          - __openssh_server_key_object__.contents | default('') | hash('sha256') == openssh_server_running.authorized_key.sha256
+
+    - name: 'BEGIN | Refuse An Object That Is Not An OpenSSH Public Key'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The public key object '{{ openssh_server_running.authorized_key.object }}' matched its
+          digest but is not an OpenSSH public key. Refusing to install it: sshd would reject the
+          file at login time, hours from now, with nothing pointing back here.
+        quiet: true
+        that:
+          - __openssh_server_key_object__.contents | default('') | trim is match('^(ssh-(rsa|ed25519)|ecdsa-sha2-nistp[0-9]+) [A-Za-z0-9+/=]+')
+
+    #endregion --- [ Begin: Refuse A Key That Is Not The Pinned One ] ------------------------- #
+
+#endregion --- [ Begin: Read The Logon And The Key This Host Is Given Back ] ------------------ #
+
+
+#region ------ [ Process: Restore The SSH Transport ] ----------------------------------------- #
+
+- name: 'PROCESS | Restore The SSH Transport'
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: Stage The Payload On The Guest ] -------------------------------- #
+    # The cab crosses the WinRM session as a file. The trailing backslash on dest is the module's
+    # own signal to copy INTO the directory under the source's name, so the staged file is the
+    # cab as the operator has it and DISM finds it by its package identity, not by a name this
+    # role invented. Not no_log: the payload is a public Microsoft package.
+
+    - name: 'PROCESS | Ensure The Payload Staging Directory Exists'
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ openssh_server_running.capability.staging_dir }}"
+        state: 'directory'
+
+    - name: 'PROCESS | Carry The Features On Demand Payload To The Guest'
+
+      ansible.windows.win_copy:
+        backup: false
+        decrypt: true
+        dest: "{{ openssh_server_running.capability.staging_dir }}\\"
+        force: true
+        local_follow: true
+        remote_src: false
+        src: "{{ openssh_server_running.capability.payload_path }}"
+
+    #endregion --- [ Process: Stage The Payload On The Guest ] -------------------------------- #
+
+    #region ------ [ Process: Install The Capability ] ---------------------------------------- #
+    # The module reads DISM's state and acts only on a capability that is neither installed nor
+    # pending, which is the distinction an idempotent converge turns on. disable_windows_update is
+    # DISM's -LimitAccess: with the payload staged, an install that succeeds proves the cab, and
+    # one that fails names the cab rather than a network this host was never allowed to use. The
+    # module runs the install through a batch logon of the same account, because DISM refuses a
+    # network logon -- so the LAPS administrator needs 'Log on as a batch job', which
+    # Administrators hold by default.
+
+    - name: 'PROCESS | Install The OpenSSH Server Capability From The Staged Payload'
+      register: '__openssh_server_capability__'
+
+      ansible.windows.win_capability:
+        disable_windows_update: true
+        name: [ "{{ openssh_server_running.capability.name }}" ]
+        source: [ "{{ openssh_server_running.capability.staging_dir }}" ]
+        state: 'present'
+
+    #endregion --- [ Process: Install The Capability ] ---------------------------------------- #
+
+    #region ------ [ Process: Remove The Staged Payload ] ------------------------------------- #
+    # DISM has copied what it needs into the component store by the time the install returns, so
+    # the staging directory is removed before any restart rather than left as a second copy of a
+    # package the host no longer needs. The same cleanup the framework's user_data performs.
+
+    - name: 'PROCESS | Remove The Staged Payload'
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ openssh_server_running.capability.staging_dir }}"
+        state: 'absent'
+
+    #endregion --- [ Process: Remove The Staged Payload ] ------------------------------------- #
+
+    #region ------ [ Process: Restart When DISM Requires It ] --------------------------------- #
+    # DISM answers whether a restart is required and this acts on that answer rather than on a
+    # guess. Over WinRM, which survives a reboot the same way the SSH legs do -- win_reboot waits
+    # for the transport it was given.
+
+    - name: 'PROCESS | Restart When The Capability Install Requires It'
+      when: __openssh_server_capability__.reboot_required | default(false) | bool
+
+      ansible.windows.win_reboot:
+        boot_time_command: >-
+          (Get-CimInstance -ClassName Win32_OperatingSystem -Property
+          LastBootUpTime).LastBootUpTime.ToFileTime()
+        connect_timeout: 5
+        msg: 'Restarting to finalise the OpenSSH server capability installation.'
+        post_reboot_delay: 0
+        pre_reboot_delay: 2
+        reboot_timeout: 600
+
+    #endregion --- [ Process: Restart When DISM Requires It ] --------------------------------- #
+
+    #region ------ [ Process: Ensure The OpenSSH Configuration Directory Exists ] ------------- #
+    # Normally created by the capability install. Stated anyway because the key file is written
+    # into it below and a missing parent is a failure worth naming rather than discovering.
+
+    - name: 'PROCESS | Ensure The OpenSSH Configuration Directory Exists'
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ openssh_server_running.authorized_keys.path | win_dirname }}"
+        state: 'directory'
+
+    #endregion --- [ Process: Ensure The OpenSSH Configuration Directory Exists ] ------------- #
+
+    #region ------ [ Process: Install The Operator Key ] -------------------------------------- #
+    # Windows OpenSSH reads administrative keys from this ONE file for every member of the local
+    # Administrators group, not from the user's own .ssh directory: the path is compiled into the
+    # shipped sshd_config. 'content' rather than a template, because the material is already in
+    # its final form and a template would only add a rendering step to get it wrong in. win_copy
+    # writes the bytes as given -- no byte order mark, which sshd would read as part of the key
+    # type and reject. Not no_log: the content is the public key the digest just proved.
+
+    - name: 'PROCESS | Install The Operator Key As The Administrators Authorized Key'
+
+      ansible.windows.win_copy:
+        backup: false
+        content: "{{ __openssh_server_key_object__.contents | trim }}\n"
+        decrypt: true
+        dest: "{{ openssh_server_running.authorized_keys.path }}"
+        force: true
+        local_follow: true
+        remote_src: false
+
+    #endregion --- [ Process: Install The Operator Key ] -------------------------------------- #
+
+    #region ------ [ Process: Make The Key File One sshd Will Read ] -------------------------- #
+    # sshd checks the ACL on the administrative keys file and SILENTLY IGNORES one that any
+    # account outside Administrators and SYSTEM can write. The failure mode is a key that is
+    # installed, correct, and rejected -- so inherited access is stripped rather than merely
+    # supplemented. reorganize is false because the point is removal, not conversion of inherited
+    # entries into explicit ones.
+
+    - name: 'PROCESS | Strip Inherited Access From The Authorized Keys File'
+
+      ansible.windows.win_acl_inheritance:
+        path: "{{ openssh_server_running.authorized_keys.path }}"
+        reorganize: false
+        state: 'absent'
+
+    - name: 'PROCESS | Grant Only The Principals sshd Accepts'
+      loop: "{{ openssh_server_running.authorized_keys.principals }}"
+      loop_control:
+        label: "{{ item }}"
+
+      ansible.windows.win_acl:
+        follow: false
+        inherit: 'None'
+        path: "{{ openssh_server_running.authorized_keys.path }}"
+        propagation: 'None'
+        rights: 'FullControl'
+        state: 'present'
+        type: 'allow'
+        user: "{{ item }}"
+
+    #endregion --- [ Process: Make The Key File One sshd Will Read ] -------------------------- #
+
+    #region ------ [ Process: Start The Service And Open Its Port ] --------------------------- #
+    # Automatic, not delayed: this is the transport the rest of the build arrives on, and a
+    # delayed start is a window in which it has not.
+
+    - name: 'PROCESS | Hold The OpenSSH Service Running And Automatic'
+
+      ansible.windows.win_service:
+        force_dependent_services: false
+        name: "{{ openssh_server_running.service.name }}"
+        start_mode: 'auto'
+        state: 'started'
+
+    - name: 'PROCESS | Open The OpenSSH Port'
+
+      community.windows.win_firewall_rule:
+        action: 'allow'
+        direction: 'in'
+        enabled: true
+        localport: "{{ openssh_server_running.firewall.port }}"
+        name: "{{ openssh_server_running.firewall.rule_name }}"
+        profiles: [ 'domain', 'private', 'public' ]
+        protocol: 'tcp'
+        state: 'present'
+
+    #endregion --- [ Process: Start The Service And Open Its Port ] --------------------------- #
+
+#endregion --- [ Process: Restore The SSH Transport ] ----------------------------------------- #
+
+
+#region ------ [ End: Prove The Way Back In ] ------------------------------------------------- #
+
+- name: 'END | Prove The Way Back In'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Re-Read The Capability ] -------------------------------------------- #
+    # Ungated, so a converged host proves the same state as a freshly restored one. Read back
+    # from DISM by the same identity PROCESS installed, with Windows Update forbidden as a source
+    # here too, so the read cannot succeed by way of a network the install was denied.
+
+    - name: 'END | Re-Read The OpenSSH Server Capability State'
+      register: '__openssh_server_final_capability__'
+
+      ansible.windows.win_capability_info:
+        disable_windows_update: true
+        name: [ "{{ openssh_server_running.capability.name }}" ]
+
+    - name: 'END | Prove The Capability Is Installed'
+      ansible.builtin.assert:
+        fail_msg: >-
+          Expected '{{ openssh_server_running.capability.name }}' installed; DISM reports
+          '{{ __openssh_server_final_capability__.capabilities | map(attribute='state')
+          | join(', ') | default('no such capability', true) }}'. A pending state means the
+          install needs a restart this role was not told about, and a not-present one means the
+          staged payload did not carry this capability -- check that capability.payload_path is
+          the OpenSSH SERVER cab for this guest's build.
+        quiet: true
+        that:
+          - __openssh_server_final_capability__.capabilities | length == 1
+          - __openssh_server_final_capability__.capabilities[0].state == 'Installed'
+
+    #endregion --- [ End: Re-Read The Capability ] -------------------------------------------- #
+
+    #region ------ [ End: Prove The Key Is On Disk ] ------------------------------------------ #
+    # Existence and size only. The content is not read back: it was written from a source this
+    # role verified, and reading a key file into a task result publishes it to every callback for
+    # no gain.
+
+    - name: 'END | Read The Installed Authorized Keys File'
+      register: '__openssh_server_key_file__'
+
+      ansible.windows.win_stat:
+        follow: false
+        get_checksum: false
+        path: "{{ openssh_server_running.authorized_keys.path }}"
+
+    - name: 'END | Prove The Authorized Keys File Is Installed And Not Empty'
+      ansible.builtin.assert:
+        fail_msg: >-
+          Expected an administrators authorized keys file at
+          '{{ openssh_server_running.authorized_keys.path }}'. Without it sshd has nothing to
+          authenticate the build's key against, and the SSH plays that follow cannot connect.
+        quiet: true
+        that:
+          - __openssh_server_key_file__.stat.exists | bool
+          - (__openssh_server_key_file__.stat.size | int) > 0
+
+    #endregion --- [ End: Prove The Key Is On Disk ] ------------------------------------------ #
+
+    #region ------ [ End: Prove The Port From The Controller ] -------------------------------- #
+    # From the CONTROLLER, because a host that answers itself proves nothing about a security
+    # group -- and because this transport is what every remaining play in the build depends on.
+    # A port check is the right tool here for the same reason it was in workspace_baseline: what
+    # is being proved is that a TCP connection arrives. The connection itself is proved by
+    # host_readiness in the next play, which is where a credential exists to prove more.
+    # Connection and shell pinned for the reason given on the fetch above.
+
+    - name: 'END | Prove The Controller Can Reach The OpenSSH Port'
+      changed_when: false
+      delegate_to: 'localhost'
+      vars:
+        ansible_connection: 'local'
+        ansible_shell_type: 'sh'
+
+      ansible.builtin.wait_for:
+        connect_timeout: 5
+        delay: 0
+        host: "{{ ansible_host }}"
+        msg: >-
+          OpenSSH is installed and running on the guest, but this controller cannot reach
+          {{ ansible_host }}:{{ openssh_server_running.firewall.port }}. The remaining plays
+          connect over SSH, so they would all fail as unreachable. Check that the security group
+          still carries this operator's address (the framework's debug_ip).
+        port: "{{ openssh_server_running.firewall.port }}"
+        sleep: 5
+        state: 'started'
+        timeout: 120
+
+    #endregion --- [ End: Prove The Port From The Controller ] -------------------------------- #
+
+#endregion --- [ End: Prove The Way Back In ] ------------------------------------------------- #

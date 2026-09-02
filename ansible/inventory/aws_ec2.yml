@@ -185,6 +185,18 @@ compose:
   # because the Environment filter above admits only instances that carry the tag.
   ENV: "aws_tags.Environment"
 
+  # WHICH BOOTSTRAP ROLE, said here because only the inventory knows which image it launched. The
+  # dispatcher detects an OS FAMILY -- on Windows before any facts exist -- and its map holds one
+  # role per family, so it cannot tell Server 2022 from Server 2025 and defaults to 2025. The
+  # workspace stand-in is Server 2022 (the WorkSpaces bundle OS, and the build its OpenSSH
+  # payload is cut for), and every role in the framework asserts its own release strictly, so a
+  # host routed to the wrong one fails its OS check rather than converging as the wrong release.
+  # A host variable is the ONE override that arrives before detection and is not a role param,
+  # which os_bootstrap's callers are told never to pass. Empty falls through to the map.
+  os_bootstrap_role: >-
+    ((aws_tags.Function | default('', true)) == 'workspace')
+    | ternary('Windows_Server_2022', '')
+
   #endregion --- [ Framework inputs ] --------------------------------------------------------- #
 
 #endregion --- [ Host Variables ] ------------------------------------------------------------- #

@@ -1,0 +1,41 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for workspace_builder. Description-only (style guide 8): NOT an enforcing
+# argument spec. The role's tasks/validate.yml enforces its merged-config guards.
+#
+# REQUIRED INPUTS — declared empty in defaults and supplied by the playbook.
+#
+# These are deployment-specific: the production WorkSpace changes with the site, and the
+# stand-in identity changes with every run. Concrete defaults would ship one site's values as if
+# they were universally safe, so the playbook states them where a reader can see them.
+#
+#   workspace_builder.workspace.directory_id  Directory the production WorkSpace registers in.
+#   workspace_builder.workspace.bundle_id     Bundle whose image this build reproduces.
+#   workspace_builder.workspace.user_name     User the reference flow creates the WorkSpace for.
+#   workspace_builder.identity.workspace_id   This run's EC2 instance id (stands in for ws-...).
+#   workspace_builder.identity.computer_name  The Name-tag hostname (stands in for ComputerName).
+#   workspace_builder.identity.image_id       AMI the stand-in launched from.
+#   workspace_builder.identity.private_ip     The launch-assigned private IPv4.
+#
+# No secret crosses this role: everything it records is already visible in the run's inventory.
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'workspace_builder'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    Records the AWS WorkSpace stand-in identity on a Windows guest: one machine-readable manifest
+    mapping the production WorkSpace (directory, bundle, user) onto what the host actually is
+    (instance, name, image, address), written to ProgramData and proven to round-trip. Everything
+    built onto the image can read one manifest whichever path produced the machine.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'aws', 'workspaces', 'identity']
+
+dependencies: []

@@ -1,0 +1,26 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/handlers/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Windows LAPS reads its policy at processing time, and nothing this role writes takes effect
+# until a processing pass runs, so each policy write notifies this handler rather than a result
+# a growing condition would have to test. A handler runs once however many times it was
+# notified: a converge that moves four policy values processes once, and a converged host whose
+# policy is already right never contacts the domain controller at all — which is what keeps the
+# second converge honestly changeless.
+#
+# The processing pass is where "set the built-in Administrator password from LAPS" actually
+# happens: with the policy newly applied and no valid escrowed expiration on the computer
+# object, LAPS generates a password for the RID-500 account, sets it locally, and writes the
+# escrow to Active Directory in the same pass. A DC that refuses the write (schema not
+# extended, OU missing the SELF grant, no line of sight) surfaces as a cmdlet error and fails
+# the converge here, rather than leaving a local password nothing escrowed.
+#
+# One cmdlet, no logic, so the first-class-script rule is not in play.
+#
+# =========================================================================================== #
+---
+- name: 'Process LAPS policy and escrow the password'
+  listen: 'laps-admin-policy-processing-required'
+
+  ansible.windows.win_shell: 'Invoke-LapsPolicyProcessing'

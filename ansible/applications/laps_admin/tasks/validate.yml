@@ -1,0 +1,30 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/validate.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Validates the merged laps_admin configuration after the v3 loader merge, on the CONTROLLER,
+# before anything touches the guest. The policy is fully defaulted, so what this catches is a
+# playbook override that would make LAPS refuse the policy silently — the LAPS CSP clamps or
+# rejects out-of-range values on its own terms, and a clamp is drift this role would never see.
+#
+# meta/main.yml describes these inputs; this file is what enforces them.
+#
+# =========================================================================================== #
+---
+- name: 'VALIDATE | Require A Policy Windows LAPS Will Accept Verbatim'
+  when: (state | default('present') | string | lower | trim) == 'present'
+  ansible.builtin.assert:
+    that:
+      - laps_admin_running.policy.password_length | int >= 8
+      - laps_admin_running.policy.password_length | int <= 64
+      - laps_admin_running.policy.password_complexity | int in [1, 2, 3, 4]
+      - laps_admin_running.policy.password_age_days | int >= 1
+      - laps_admin_running.policy.password_age_days | int <= 365
+    fail_msg: >-
+      Refusing to write LAPS policy: password_length must be 8-64, password_complexity one of
+      1-4, and password_age_days 1-365 — the ranges Windows LAPS accepts without clamping.
+      Observed length={{ laps_admin_running.policy.password_length | default('unset') }},
+      complexity={{ laps_admin_running.policy.password_complexity | default('unset') }},
+      age={{ laps_admin_running.policy.password_age_days | default('unset') }}. See
+      meta/main.yml.
+    quiet: true

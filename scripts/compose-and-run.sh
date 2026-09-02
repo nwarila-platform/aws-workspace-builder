@@ -121,6 +121,14 @@ git -C "${FRAMEWORK_DIR}" fetch --quiet origin
 git -C "${FRAMEWORK_DIR}" checkout --quiet --detach "${PIN}"
 echo ">> Framework pinned at $(git -C "${FRAMEWORK_DIR}" rev-parse --short HEAD)"
 
+# Remove a previous run's overlay before anything reads the tree. `git checkout` restores tracked
+# files but leaves untracked directories alone, so without this the roles this repository overlaid
+# LAST time are still sitting in applications/ -- and the framework's materializer below, which
+# validates every stub it finds, would try to resolve their sources against the FRAMEWORK's
+# scripts/ and fail. CI never sees this because every run starts from a fresh checkout; a local
+# operator sees it on their second run, which is now the normal way this playbook is run.
+git -C "${FRAMEWORK_DIR}" clean -qxfd -- applications/
+
 # The framework's own roles track only files/<Name>.ps1.stub, so their scripts must be
 # materialized in the checkout. This runs BEFORE the overlay because that materializer validates
 # every stub it finds, and this repository's roles resolve their sources from this repository.

@@ -1,0 +1,20 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/validate.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Validates the merged STUB configuration after the v3 loader merge, on the CONTROLLER.
+# The full input contract arrives when the role is finished from the google_chrome
+# pattern; until then the one thing worth proving is that the stub still names its
+# catalog target.
+#
+# =========================================================================================== #
+---
+- name: 'VALIDATE | Require The Catalog Target This Stub Reserves'
+  ansible.builtin.assert:
+    that:
+      - aws_cli_v2_running.catalog.key | default('') | length > 0
+      - aws_cli_v2_running.catalog.version | default('') | length > 0
+    fail_msg: >-
+      Refusing to continue: the stub must name the catalog product it reserves (catalog.key and
+      catalog.version). See README.md.
+    quiet: true

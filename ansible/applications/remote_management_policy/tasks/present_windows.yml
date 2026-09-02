@@ -1,0 +1,118 @@
+# ============================================================================================= #
+# File: '{{ role_path }}/tasks/present_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Prepares the directory a WorkSpace is born into: the organizational unit its computer object
+# is created in, and the Group Policy Object linked there that opens the machine to its operator.
+#
+# THIS RUNS ON A DOMAIN CONTROLLER. Group Policy lives in the directory and in SYSVOL, so it is
+# written where they are; the host being built is not contacted, and does not exist yet.
+#
+# THE OU IS NATIVE, THE POLICY IS NOT. microsoft.ad.ou ensures the OU the way it ensures any
+# object. No module writes a GPO's registry policy, its firewall rules, its security template
+# and its link together, so a first-class script does, comparing each before it writes: the
+# WinRM listener and the unfiltered remote token (registry policy), one inbound rule admitting
+# the operator address alone to TCP 5985 (the GPO's firewall store), and the "deny network" and
+# "deny Remote Desktop" logon lists with the local-account SIDs taken out (the security
+# template, plus the extension registration and version bump the template needs to apply).
+#
+# THIS IS THE TEST DOMAIN'S STAND-IN for a production directory's standing configuration. It
+# writes only what a WorkSpace needs to be reached, and re-asserts it on every run; the LAPS
+# policy itself is the domain's to deliver and is not touched here.
+#
+# ============================================================================================= #
+---
+#region ------ [ Begin: Prepare The Directory ] ----------------------------------------------- #
+
+- name: 'BEGIN | Prepare The Directory The WorkSpace Is Born Into'
+
+  # Begin The 'Begin' Block
+  block:
+
+    #region ------ [ Begin: Ensure The Organizational Unit ] ---------------------------------- #
+    # The DN is split at its first comma: the leaf is the OU's name and the remainder is its
+    # parent, which must already exist. The parent carries the join delegation and the LAPS
+    # self-write rights a computer object needs, and a child OU inherits both; creating the
+    # parent here would create it without them, which is why only the leaf is this role's to
+    # make. Protected from accidental deletion like every OU a console user might click on.
+
+    - name: 'BEGIN | Ensure The OU The WorkSpace Is Created In'
+      register: '__remote_management_policy_ou__'
+
+      microsoft.ad.ou:
+        description: >-
+          WorkSpaces, and the EC2 stand-ins that prove their image. Managed by
+          aws-workspace-builder.
+        name: "{{ (remote_management_policy_running.target_ou.split(',', 1) | first) | regex_replace('^OU=', '') }}"
+        path: "{{ remote_management_policy_running.target_ou.split(',', 1) | last }}"
+        protect_from_deletion: true
+        state: 'present'
+
+    #endregion --- [ Begin: Ensure The Organizational Unit ] ---------------------------------- #
+
+    #region ------ [ Begin: Converge The Policy ] --------------------------------------------- #
+    # Parameters cross as typed module options, never Jinja spliced into the script source, which
+    # is what keeps the injection surface at zero. No changed_when: the script compares every
+    # setting before writing it and sets $Ansible.Changed itself, so a second run reports no
+    # change and check mode reports what would have. The referenced .ps1 is MATERIALIZED from
+    # scripts/ by scripts/materialize-role-scripts.sh (the role tracks only
+    # files/Set-RemoteManagementPolicy.ps1.stub); run it before this role.
+
+    - name: 'BEGIN | Converge The Remote Management Policy And Its Link'
+      register: '__remote_management_policy_set__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          Comment: "{{ remote_management_policy_running.comment }}"
+          Name: "{{ remote_management_policy_running.name }}"
+          OperatorAddress: "{{ remote_management_policy_running.operator_address }}"
+          TargetOU: "{{ remote_management_policy_running.target_ou }}"
+        script: "{{ lookup('ansible.builtin.file', 'Set-RemoteManagementPolicy.ps1') }}"
+
+    #endregion --- [ Begin: Converge The Policy ] --------------------------------------------- #
+
+#endregion --- [ Begin: Prepare The Directory ] ----------------------------------------------- #
+
+
+#region ------ [ End: Prove And Report The Policy ] ------------------------------------------- #
+
+- name: 'END | Prove And Report The Policy'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Prove The Policy Exists ] ------------------------------------------- #
+    # The script throws on anything it cannot converge, so what remains to prove is the shape the
+    # play depends on: a policy the directory can now be asked about by id. Check mode against a
+    # domain that has no policy yet legitimately reports none, and is excused.
+
+    - name: 'END | Prove The Directory Carries The Policy'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The directory reports no policy named
+          '{{ remote_management_policy_running.name }}' after the converge:
+          {{ __remote_management_policy_set__.result.msg | default('no result was returned') }}
+        quiet: true
+        that:
+          - ansible_check_mode or (__remote_management_policy_set__.result.gpo_id | default('') | length > 0)
+
+    #endregion --- [ End: Prove The Policy Exists ] ------------------------------------------- #
+
+    #region ------ [ End: Report What The Directory Was Told ] -------------------------------- #
+    # Every action the script took, or would have taken, in the order it took them; a run that
+    # changed nothing says so in one line.
+
+    - name: 'END | Report What The Directory Was Told'
+      ansible.builtin.debug:
+        msg: >-
+          {{ __remote_management_policy_set__.result.msg | default('No result was returned.') }}
+          OU {{ remote_management_policy_running.target_ou }}
+          {{ ('would be created' if ansible_check_mode else 'created this run') if __remote_management_policy_ou__ is changed else 'already present' }};
+          firewall rule admits {{ remote_management_policy_running.operator_address }}.
+        verbosity: 0
+
+    #endregion --- [ End: Report What The Directory Was Told ] -------------------------------- #
+
+#endregion --- [ End: Prove And Report The Policy ] ------------------------------------------- #

@@ -1,0 +1,19 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the winscp STUB. The v3 loader merges the OS
+# overlay in vars/ over this map and publishes the result as 'winscp_running'.
+#
+# STUB: the map carries only the catalog target this role reserves. The key is the
+# fleet's <Publisher>_<Product> catalog identity and the version is the ratified fleet
+# pin; both are re-measured when the artifact lands in the application repository and
+# the role is finished from the google_chrome pattern.
+#
+# =========================================================================================== #
+---
+winscp_defaults:
+
+  catalog:
+    key: 'Martin-Prikryl_WinSCP'
+    version: '6.5.6'

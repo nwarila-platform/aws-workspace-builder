@@ -19,7 +19,16 @@
 !/.github/
 !/.github/workflows/
 !/ansible/
+!/ansible/applications/
+!/ansible/applications/*/
+!/ansible/applications/*/defaults/
+!/ansible/applications/*/files/
+!/ansible/applications/*/handlers/
+!/ansible/applications/*/meta/
+!/ansible/applications/*/tasks/
+!/ansible/applications/*/vars/
 !/ansible/inventory/
+!/ansible/playbooks/
 !/scripts/
 !/terraform/
 
@@ -46,10 +55,32 @@
 !/.github/workflows/quality.yml
 
 # --- [ allowed: the ansible tree ] ---------------------------------------------------------- #
+# Role entries use the two ratified wildcard shapes ONLY: the role-name segment of an
+# otherwise fully-explicit path. Every role carries the same file set, so a per-role explicit
+# list would be forty copies of these lines. Materialized files/<Name>.ps1 copies are build
+# artifacts and are deliberately NEVER allowlisted; only each role's .stub marker is tracked.
+!/ansible/applications/*/README.md
+!/ansible/applications/*/defaults/main.yml
+!/ansible/applications/*/files/Get-InstalledSoftware.ps1.stub
+!/ansible/applications/*/files/Get-LapsCredential.ps1.stub
+!/ansible/applications/*/files/Set-RemoteManagementPolicy.ps1.stub
+!/ansible/applications/*/handlers/main.yml
+!/ansible/applications/*/meta/main.yml
+!/ansible/applications/*/tasks/main.yml
+!/ansible/applications/*/tasks/present_windows.yml
+!/ansible/applications/*/tasks/validate.yml
+!/ansible/applications/*/vars/windows.yml
 !/ansible/inventory/README.md
 !/ansible/inventory/aws_ec2.yml
+!/ansible/inventory/domain_controllers.yml
+!/ansible/playbooks/aws-workspace-builder-aws.yml
 
 # --- [ allowed: scripts ] ------------------------------------------------------------------- #
+!/scripts/Get-InstalledSoftware.pester.ps1
+!/scripts/Get-InstalledSoftware.ps1
+!/scripts/Get-LapsCredential.pester.ps1
+!/scripts/Get-LapsCredential.ps1
+!/scripts/Set-RemoteManagementPolicy.ps1
 !/scripts/compose-and-run.sh
 !/scripts/materialize-role-scripts.sh
 
