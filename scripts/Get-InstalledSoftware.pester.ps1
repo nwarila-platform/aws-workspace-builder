@@ -319,6 +319,58 @@ Describe 'Get-InstalledSoftware' {
       $Result.entries[0].product_id | Should -Be '{a535ae3f-ae28-4e8a-9174-b918c3355ee0}'
     }
 
+    It 'keeps the wrapped MSI so a bundle can still be uninstalled' {
+      # The real bundle shape: the visible half registers under a key of its own choosing and
+      # publishes NO ProductCode, while the {GUID} that is the ProductCode belongs to the hidden
+      # MSI it wraps. Discarding the hidden one left the removal paths with no handle at all.
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'Amazon SSM Agent'; DisplayVersion = '3.3.4851.0'; SystemComponent = 1
+        PSChildName = '{1C1593B7-10E6-4745-9E59-8FB311CC92F4}'
+      }
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'Amazon SSM Agent'; DisplayVersion = '3.3.4851.0'; PSChildName = 'SSMAgent_is1'
+      }
+
+      $Result = & $script:ScriptPath -DisplayName 'Amazon SSM Agent' -Version '3.3.4851.0' | ConvertFrom-Json
+
+      # The visible one still answers the version question, and publishes no ProductCode.
+      $Result.count | Should -Be 1
+      $Result.entries[0].product_id | Should -Be ''
+      # The removal handle survives beside it.
+      $Result.hidden_entries | Should -HaveCount 1
+      $Result.hidden_entries[0].product_id | Should -Be '{1C1593B7-10E6-4745-9E59-8FB311CC92F4}'
+    }
+
+    It 'reports no hidden entries when nothing was displaced' {
+      $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '20.1.8.0' }
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
+      $Result.hidden_entries | Should -HaveCount 0
+    }
+
+    It 'treats any non-zero SystemComponent as hidden, not just 1' {
+      # Windows hides on non-zero. Comparing against the literal 1 left a product marked 2
+      # reported as visible, so the unhide repair never ran and it stayed out of inventory.
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'PDQ Deploy'; DisplayVersion = '20.1.8.0'; SystemComponent = 2
+      }
+
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
+
+      $Result.arp_hidden | Should -BeTrue
+      $Result.hidden_registry_keys | Should -HaveCount 1
+    }
+
+    It 'treats SystemComponent zero as visible' {
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'PDQ Deploy'; DisplayVersion = '20.1.8.0'; SystemComponent = 0
+      }
+
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
+
+      $Result.arp_hidden | Should -BeFalse
+      $Result.count | Should -Be 1
+    }
+
     It 'still answers from a hidden registration when it is the only one' {
       # Dropping it would report a present product as absent, which is worse than reading it.
       $global:FakeRegistry[$script:Native] += @{

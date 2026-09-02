@@ -130,7 +130,11 @@
     # how to remove it.
     __downgrade_required__: "{{ __aws_cfn_bootstrap_arp__.result.downgrade_required | default(false) }}"
     __installed_entry__: "{{ __aws_cfn_bootstrap_arp__.result.entries | default([]) | first | default({}) }}"
-    __installed_product_id__: "{{ __installed_entry__.product_id | default('') }}"
+    # Same fallback as the absent state: a bundle's removal handle lives on the hidden MSI.
+    __installed_hidden__: "{{ __aws_cfn_bootstrap_arp__.result.hidden_entries | default([]) | first | default({}) }}"
+    __installed_product_id__: >-
+      {{ __installed_entry__.product_id | default('') | ternary(__installed_entry__.product_id | default(''),
+          __installed_hidden__.product_id | default('')) }}
     __installed_quiet_uninstall__: "{{ __installed_entry__.QuietUninstallString | default('') }}"
 
   # Begin The 'Process' Block

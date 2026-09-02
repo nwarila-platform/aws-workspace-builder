@@ -56,7 +56,13 @@
   vars:
     __registered__: "{{ (__visual_studio_code_arp__.result.count | int) > 0 }}"
     __entry__: "{{ __visual_studio_code_arp__.result.entries | default([]) | first | default({}) }}"
-    __product_id__: "{{ __entry__.product_id | default('') }}"
+    # An installer bundle publishes no ProductCode on its visible half -- the {GUID} that is the
+    # ProductCode belongs to the hidden MSI it wraps. The read keeps that registration beside the
+    # visible one precisely so a removal still has a handle.
+    __hidden_entry__: "{{ __visual_studio_code_arp__.result.hidden_entries | default([]) | first | default({}) }}"
+    __product_id__: >-
+      {{ __entry__.product_id | default('') | ternary(__entry__.product_id | default(''),
+          __hidden_entry__.product_id | default('')) }}
     __quiet_uninstall__: "{{ __entry__.QuietUninstallString | default('') }}"
 
   # Begin The 'Process' Block

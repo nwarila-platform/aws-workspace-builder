@@ -80,7 +80,12 @@
 
     .OUTPUTS
         One object carrying action_required, comparison, downgrade_required,
-        changed, check_mode, count, entries, installed_version and msg.
+        changed, check_mode, count, entries, hidden_entries,
+        installed_version and msg.
+
+        hidden_entries holds registrations a visible one displaced -- the
+        wrapped MSI of an installer bundle, whose {GUID} key name is the
+        ProductCode a removal needs. Empty unless a bundle registered twice.
 
         The pin is EXACT. action_required is true unless the registered version
         equals it, and comparison says why -- absent, older, newer or equal --
@@ -237,6 +242,11 @@ If ($StandaloneRun) {
   }
 }
 
+# The transport injects Changed = $true and reads it back even after a throw, so a script that
+# only sets its verdict in the Output region reports a change it never made. Settled here, before
+# anything can fail.
+$Ansible.Changed = $False
+
 #endregion --- [ Initialization ] ------------------------------------------------------------ #
 
 #region ------ [ Main ] ---------------------------------------------------------------------- #
@@ -323,10 +333,30 @@ $Entries = @($Entries | Sort-Object -Property:@('DisplayVersion', 'InstallLocati
 # than answering from the entry that is actually there.
 $VisibleEntries = @(
   $Entries | Where-Object {
+    # Windows hides a registration whose SystemComponent is NON-ZERO, not one whose value is
+    # literally 1. Comparing against '1' left a product marked 2 reported as visible, so nothing
+    # ever repaired it and it stayed invisible to anything inventorying by Add/Remove Programs.
     $SystemComponentProperty = $PSItem.PSObject.Properties['SystemComponent']
-    ($Null -eq $SystemComponentProperty) -or ([System.String]$SystemComponentProperty.Value -ne '1')
+    $HiddenFlag = 0
+    If ($Null -ne $SystemComponentProperty) {
+      $Parsed = 0
+      If ([System.Int64]::TryParse([System.String]$SystemComponentProperty.Value, [Ref]$Parsed)) {
+        $HiddenFlag = $Parsed
+      }
+    }
+    $HiddenFlag -eq 0
   }
 )
+
+# THE REGISTRATIONS THE VISIBLE ONE HID, KEPT RATHER THAN DELETED. An installer bundle registers
+# twice under one name: itself, visible, under a key of its own choosing, plus the MSI it wraps,
+# hidden, under the {GUID} that IS the ProductCode. Preferring the visible one is right for
+# reading a version -- but discarding the other threw away the only removal handle the product
+# published, so an uninstall or a downgrade then refused with "publishes neither a ProductCode
+# nor a QuietUninstallString" while the machine did publish one. They are reported separately so
+# 'count', 'ambiguous' and 'installed_version' keep meaning exactly what they meant before.
+$HiddenEntries = @($Entries | Where-Object { $VisibleEntries -notcontains $PSItem })
+
 $ArpHidden = ($VisibleEntries.Count -eq 0) -and ($Entries.Count -gt 0)
 If (-not $ArpHidden) {
   $Entries = $VisibleEntries
@@ -422,6 +452,7 @@ $Result = [PSCustomObject]@{
   check_mode           = $Ansible.CheckMode
   count                = $Entries.Count
   entries              = $Entries
+  hidden_entries       = $HiddenEntries
   hidden_registry_keys = $HiddenRegistryKeys
   installed_version    = $InstalledVersion
   msg                  = $Message

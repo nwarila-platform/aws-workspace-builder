@@ -281,6 +281,11 @@ If ($StandaloneRun) {
   }
 }
 
+# The transport injects Changed = $true and reads it back even after a throw, so a script that
+# only sets its verdict in the Output region reports a change it never made. Settled here, before
+# anything can fail.
+$Ansible.Changed = $False
+
 #endregion --- [ Initialization ] ------------------------------------------------------------ #
 
 #region ------ [ Main ] ---------------------------------------------------------------------- #
