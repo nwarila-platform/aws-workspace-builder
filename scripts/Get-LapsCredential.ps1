@@ -61,6 +61,17 @@
         ActionPreference value per digit (0 SilentlyContinue, 1 Stop,
         2 Continue, 3 Inquire, 4 Ignore, 5 Suspend). Default '002223'.
 
+    .PARAMETER NotBefore
+        The moment the caller knows this machine existed -- resolved before the
+        domain join. An escrow written at or before it belongs to a previous
+        occupant of a reused computer object, not to this one, and is reported
+        as not-yet-escrowed so a poll keeps waiting instead of handing back a
+        credential that will not authenticate. Windows LAPS rotates only when
+        there is no valid escrowed expiration, so a reused object inside its
+        password age is not rotated and this is the only thing standing between
+        the caller and the previous instance's password. Omitted, the freshness
+        check is skipped and any non-empty escrow satisfies the read.
+
     .PARAMETER Identity
         The computer's name as Active Directory knows it -- its
         sAMAccountName without the trailing dollar, which is the NetBIOS
@@ -108,7 +119,17 @@ Param (
   )]
   [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]{0,14}$')]
   [System.String]
-  $Identity
+  $Identity,
+
+  [Parameter(
+    DontShow = $False,
+    Mandatory = $False,
+    ParameterSetName = 'default',
+    ValueFromPipeline = $False,
+    ValueFromPipelineByPropertyName = $False
+  )]
+  [System.DateTime]
+  $NotBefore = [System.DateTime]::MinValue
 )
 
 #region ------ [ Script ] -------------------------------------------------------------------- #
@@ -126,10 +147,23 @@ New-Variable -Force -Name:'LOG_LEVELS' -Option:('Private', 'ReadOnly') -Value:(
   [System.String[]]@('Verbose', 'Debug', 'Information', 'Warning', 'Error', 'Fatal')
 )
 
-# The shapes an "identity does not exist" error takes across the LAPS module and the directory
-# beneath it. Any of these means polling would never help, so the read fails hard.
-New-Variable -Force -Name:'NOT_FOUND_PATTERN' -Option:('Private', 'ReadOnly') -Value:(
-  '(?i)not found|cannot find|could not be found|does not exist|no such object|unable to locate'
+# The exception TYPES that mean "the directory does not know this name". Matching the message
+# text instead was wrong in both directions: 'does not exist' also appears in "The specified
+# domain either does not exist or could not be contacted" -- the transient error a just-joined
+# machine provokes, and the one case where waiting is exactly the right answer -- while a
+# localized domain controller returns a genuine not-found in words no English pattern matches.
+# A type is not translated and does not overlap.
+New-Variable -Force -Name:'NOT_FOUND_TYPES' -Option:('Private', 'ReadOnly') -Value:(
+  [System.String[]]@(
+    'Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException'
+    'Microsoft.ActiveDirectory.Management.ADIdentityResolutionException'
+  )
+)
+
+# A name this host cannot resolve at all is also unfixable by waiting: it means the LAPS module
+# is not installed on the machine running this script, which no amount of polling installs.
+New-Variable -Force -Name:'UNRESOLVED_COMMAND_TYPE' -Option:('Private', 'ReadOnly') -Value:(
+  'System.Management.Automation.CommandNotFoundException'
 )
 
 # Initialize the custom stream preferences; the built-in ones already exist.
@@ -223,7 +257,11 @@ $Reason = [System.String]::Empty
 Try {
   $Escrow = Get-LapsADPassword -Identity:$Identity -AsPlainText
 } Catch {
-  If ($PSItem.Exception.Message -match $NOT_FOUND_PATTERN) {
+  # Classified on the exception's own type. Anything else -- a domain that could not be
+  # contacted, a directory that is momentarily unavailable, a replication delay -- is a state to
+  # keep waiting through, which is the entire purpose of the caller's poll.
+  $ExceptionType = [System.String]$PSItem.Exception.GetBaseException().GetType().FullName
+  If ($NOT_FOUND_TYPES -contains $ExceptionType -or $ExceptionType -eq $UNRESOLVED_COMMAND_TYPE) {
     Throw
   }
   $Reason = [System.String]$PSItem.Exception.Message
@@ -253,7 +291,26 @@ ForEach ($FieldName In @('Account', 'ExpirationTimestamp', 'Password', 'Password
 # with an empty Password for an attribute-less computer in some builds and nothing at all in
 # others; both are the same state to a caller.
 $Password = [System.String]$Fields['Password']
-$Escrowed = $Password.Length -gt 0
+$HasPassword = $Password.Length -gt 0
+
+# AND IT MUST BE THIS MACHINE'S PASSWORD. Windows LAPS rotates only when there is no valid
+# escrowed expiration, so a computer object reused inside its password age still holds the
+# PREVIOUS instance's credential -- and a caller polling for "non-empty" is handed it instantly,
+# authenticates with it, and fails against a machine that has already given up every other way
+# in. NotBefore is the moment the caller knows this instance existed; an escrow written before
+# that belongs to something else and is reported as not-yet-escrowed so the poll keeps waiting.
+$Stale = $False
+If ($HasPassword -and $NotBefore -ne [System.DateTime]::MinValue) {
+  $UpdatedText = [System.String]$Fields['PasswordUpdateTime']
+  $Updated = [System.DateTime]::MinValue
+  If ([System.DateTime]::TryParse($UpdatedText, [Ref]$Updated)) {
+    $Stale = $Updated.ToUniversalTime() -le $NotBefore.ToUniversalTime()
+  } Else {
+    # A credential that cannot say when it was written cannot be shown to be this machine's.
+    $Stale = $True
+  }
+}
+$Escrowed = $HasPassword -and -not $Stale
 
 If ($Escrowed) {
   $Account = [System.String]$Fields['Account']
@@ -267,6 +324,10 @@ If ($Escrowed) {
     $ExpirationTimestamp
   )
 } Else {
+  # WITHHELD, NOT MERELY FLAGGED. A stale escrow is a real password, and a caller that read
+  # .password without first checking .escrowed would authenticate with the previous occupant's
+  # credential -- the exact failure the freshness check exists to prevent. It never leaves here.
+  $Password = [System.String]::Empty
   $Account = [System.String]::Empty
   $ExpirationTimestamp = [System.String]::Empty
   $PasswordUpdatedTime = [System.String]::Empty

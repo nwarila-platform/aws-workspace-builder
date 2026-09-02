@@ -16,6 +16,7 @@
 - name: 'VALIDATE | Require The Computer This Read Is Waiting On'
   ansible.builtin.assert:
     that:
+      - laps_credential_running.not_before | default('') is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T')
       - laps_credential_running.identity | default('') | length > 0
       - laps_credential_running.identity is match('^[A-Za-z0-9][A-Za-z0-9-]{0,14}$')
     fail_msg: >-

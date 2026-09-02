@@ -209,6 +209,26 @@
   hosts: 'domain_controllers'
   any_errors_fatal: true
 
+  #region ------ [ Pre-Tasks ] ---------------------------------------------------------------- #
+  pre_tasks:
+
+    # THE CLOCK THIS RUN IS MEASURED AGAINST, read from the DIRECTORY's own clock because the
+    # timestamp it will be compared with is one the directory writes. Taken here, in the play
+    # before the guest joins anything, so that any escrow already on a reused computer object is
+    # necessarily older than it -- which is exactly what makes a stale credential detectable.
+    - name: 'PRE | Take The Freshness Baseline From The Directory Clock'
+      changed_when: false
+      register: '__laps_baseline__'
+
+      ansible.windows.win_powershell:
+        depth: 2
+        error_action: 'stop'
+        script: |
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ utc = (Get-Date).ToUniversalTime().ToString('o') }
+
+  #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
+
   #region ------ [ Roles ] -------------------------------------------------------------------- #
   roles:
 
@@ -350,6 +370,55 @@
 
   #endregion --- [ Pre-Tasks: Write Down The Name The Directory Knows ] ----------------------- #
 
+  #region ------ [ Pre-Tasks ] ---------------------------------------------------------------- #
+  pre_tasks:
+
+    # THE POINT OF NO RETURN HAS A GATE ON IT. Everything below this play revokes the only
+    # credential that currently works, and the only thing that replaces it is an escrow LAPS
+    # writes on its own schedule. This play already proves the WinRM listener answers -- but a
+    # listener is not a credential, and under the default policy source nothing in this entire run
+    # touches LAPS on the guest. Without this gate the first time the run learns whether a LAPS
+    # policy exists at all is the play AFTER the key is gone: two hours of silent polling, then a
+    # guest reachable by nothing.
+    #
+    # The guest's own effective policy is what is read, not the directory's intent, because a GPO
+    # that exists but has not reached this machine yet buys nothing. BackupDirectory 2 is
+    # "escrow to Active Directory"; 1 is Entra, which this path cannot read.
+    - name: 'SEAL | Read The LAPS Policy The Guest Has Actually Received'
+      changed_when: false
+      register: '__seal_laps_policy__'
+
+      ansible.windows.win_powershell:
+        depth: 2
+        error_action: 'stop'
+        script: |
+          $Key = 'HKLM:\Software\Microsoft\Policies\LAPS'
+          $Backup = 0
+          If (Test-Path -LiteralPath:$Key) {
+            $Item = Get-ItemProperty -LiteralPath:$Key -ErrorAction:'SilentlyContinue'
+            If ($Null -ne $Item) {
+              $Property = $Item.PSObject.Properties['BackupDirectory']
+              If ($Null -ne $Property) { $Backup = [System.Int32]$Property.Value }
+            }
+          }
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ backup_directory = $Backup; escrows_to_ad = ($Backup -eq 2) }
+
+    - name: 'SEAL | Refuse To Seal A Guest No Credential Will Ever Reach'
+      ansible.builtin.assert:
+        fail_msg: >-
+          Refusing to seal: this guest has no effective Windows LAPS policy escrowing to Active
+          Directory (BackupDirectory is
+          {{ __seal_laps_policy__.result.backup_directory | default('unset') }}, and 2 is
+          required). The seal revokes the launch key and closes port 22, and the ONLY way back in
+          is the credential LAPS escrows -- so sealing now would strand this guest. Link the LAPS
+          policy to {{ workspace_computer_ou }} and re-run, or pass
+          -e laps_policy_source=local to have this build write the policy itself.
+        quiet: true
+        that: [ __seal_laps_policy__.result.escrows_to_ad | default(false) | bool ]
+
+  #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
+
   #region ------ [ Roles ] -------------------------------------------------------------------- #
   roles:
 
@@ -398,6 +467,10 @@
     # The role publishes the credential through its registered result and never logs it. The play
     # below reads it out of hostvars on this host.
     - role: 'laps_credential'
+      vars:
+        laps_credential:
+          not_before: >-
+            {{ hostvars[groups['domain_controllers'] | first]['__laps_baseline__'].result.utc }}
       when: (state | default('present') | string | lower | trim) != 'absent'
       vars:
         laps_credential:

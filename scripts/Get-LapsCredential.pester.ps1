@@ -28,6 +28,20 @@ $ErrorActionPreference = 'Stop'
 
 BeforeAll {
   $script:ScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Get-LapsCredential.ps1'
+
+  # The script classifies a not-found by exception TYPE, so the spec has to be able to throw one.
+  # The real type ships with the ActiveDirectory module and does not exist on the Linux leg this
+  # suite runs on, so it is declared here under its own namespace: the script reads
+  # GetBaseException().GetType().FullName, which makes this faithful rather than a stand-in.
+  If (-not ('Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException' -as [System.Type])) {
+    Add-Type -TypeDefinition @'
+namespace Microsoft.ActiveDirectory.Management {
+  public class ADIdentityNotFoundException : System.Exception {
+    public ADIdentityNotFoundException(string message) : base(message) { }
+  }
+}
+'@
+  }
   $script:Updated = [System.DateTime]::new(2026, 8, 31, 14, 5, 0, [System.DateTimeKind]::Utc)
   $script:Expires = $script:Updated.AddDays(30)
 
@@ -72,6 +86,9 @@ BeforeAll {
     $global:FakeReads++
     $global:FakeIdentity = $Identity
     $global:FakePlainText = $AsPlainText.IsPresent
+    If ($global:FakeErrorType) {
+      Throw ($global:FakeErrorType -as [System.Type])::new($global:FakeError)
+    }
     If ($global:FakeError) {
       Throw $global:FakeError
     }
@@ -80,7 +97,7 @@ BeforeAll {
 }
 
 AfterAll {
-  Remove-Variable -Name 'FakeEscrow', 'FakeError', 'FakeReads', 'FakeIdentity', 'FakePlainText' `
+  Remove-Variable -Name 'FakeEscrow', 'FakeError', 'FakeErrorType', 'FakeReads', 'FakeIdentity', 'FakePlainText' `
     -Scope 'Global' -ErrorAction 'SilentlyContinue'
 }
 
@@ -94,6 +111,7 @@ Describe 'Get-LapsCredential' {
     # The directory has escrowed nothing yet: the state a freshly joined machine starts in.
     $global:FakeEscrow = $Null
     $global:FakeError = $Null
+    $global:FakeErrorType = $Null
     $global:FakeReads = 0
     $global:FakeIdentity = $Null
     $global:FakePlainText = $False
@@ -148,6 +166,46 @@ Describe 'Get-LapsCredential' {
       $Emitted | Should -Match '"expiration_timestamp":\s*"2026-09-30T14:05:00\.0000000Z"'
     }
 
+    It 'reports an escrow written before this machine existed as not yet escrowed' {
+      # A reused computer object still holds the PREVIOUS occupant's credential: Windows LAPS
+      # rotates only when there is no valid escrowed expiration. Without this the poll succeeds
+      # instantly with a password that will not authenticate, against a host already sealed.
+      $global:FakeEscrow = New-FakeEscrow
+
+      $Result = & $script:ScriptPath -Identity 'TCNAW-WSB01' -NotBefore $script:Updated.AddMinutes(5) |
+        ConvertFrom-Json
+
+      $Result.escrowed | Should -BeFalse
+      $Result.password | Should -BeNullOrEmpty
+    }
+
+    It 'accepts an escrow written after this machine existed' {
+      $global:FakeEscrow = New-FakeEscrow
+
+      $Result = & $script:ScriptPath -Identity 'TCNAW-WSB01' -NotBefore $script:Updated.AddMinutes(-5) |
+        ConvertFrom-Json
+
+      $Result.escrowed | Should -BeTrue
+      $Result.password | Should -Be 'Sup3r-S3cret-Passw0rd!'
+    }
+
+    It 'refuses an escrow that cannot say when it was written' {
+      $global:FakeEscrow = New-FakeEscrow
+      $global:FakeEscrow.PasswordUpdateTime = $Null
+
+      $Result = & $script:ScriptPath -Identity 'TCNAW-WSB01' -NotBefore $script:Updated | ConvertFrom-Json
+
+      $Result.escrowed | Should -BeFalse
+    }
+
+    It 'skips the freshness check entirely when no baseline is given' {
+      $global:FakeEscrow = New-FakeEscrow
+
+      $Result = & $script:ScriptPath -Identity 'TCNAW-WSB01' | ConvertFrom-Json
+
+      $Result.escrowed | Should -BeTrue
+    }
+
     It 'passes the identity through to the directory as given' {
       & $script:ScriptPath -Identity 'TCNAW-WSB01' | Out-Null
 
@@ -167,9 +225,28 @@ Describe 'Get-LapsCredential' {
     }
 
     It 'fails hard on an identity the directory does not know, because waiting would never fix it' {
+      $global:FakeErrorType = 'Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException'
       $global:FakeError = 'Cannot find an object with identity: ''NOPE-01'''
 
       { & $script:ScriptPath -Identity 'NOPE-01' 2>$null } | Should -Throw '*Cannot find*'
+    }
+
+    It 'keeps waiting when the DOMAIN cannot be contacted, though the words say "does not exist"' {
+      # The message a just-joined machine provokes. Classifying on text treated this as a fatal
+      # not-found and aborted a wait whose whole purpose is to sit through exactly this.
+      $global:FakeError = 'The specified domain either does not exist or could not be contacted'
+
+      $Result = & $script:ScriptPath -Identity 'TCNAW-WSB01' 2>$null | ConvertFrom-Json
+
+      $Result.escrowed | Should -BeFalse
+      $Result.msg | Should -Match 'could not be contacted'
+    }
+
+    It 'fails hard when the LAPS module is not installed, because polling installs nothing' {
+      $global:FakeErrorType = 'System.Management.Automation.CommandNotFoundException'
+      $global:FakeError = 'Get-LapsADPassword'
+
+      { & $script:ScriptPath -Identity 'TCNAW-WSB01' 2>$null } | Should -Throw
     }
 
     It 'rejects an identity that is not a computer name' {

@@ -27,6 +27,15 @@ laps_credential_defaults:
   # controller in a second rather than waiting two hours for a machine that was never named.
   identity: ''
 
+  # THE MOMENT THIS MACHINE IS KNOWN TO HAVE EXISTED, resolved by the caller BEFORE the domain
+  # join. An escrow written at or before it belongs to a previous occupant of a reused computer
+  # object: Windows LAPS rotates only when there is no valid escrowed expiration, so a name reused
+  # inside its password age still holds the old credential and the poll would succeed instantly
+  # with a password that cannot authenticate -- against a host that has already given up every
+  # other way in. DateTime.MinValue means "no baseline", which skips the check; the playbook
+  # supplies a real one.
+  not_before: '0001-01-01T00:00:00.0000000Z'
+
   #endregion --- [ Identity ] ------------------------------------------------------------------ #
 
   #region ------ [ Wait ] ---------------------------------------------------------------------- #

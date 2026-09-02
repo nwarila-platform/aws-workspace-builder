@@ -50,13 +50,19 @@
       no_log: true
       register: '__laps_credential_read__'
       retries: "{{ laps_credential_running.wait.attempts | int }}"
-      until: __laps_credential_read__.result.escrowed | bool
+      # GUARDED, BECAUSE A FAILED ATTEMPT HAS NO RESULT. When the module fails, 'result' is null,
+      # and an unguarded 'result.escrowed' raises instead of evaluating -- which ends the retry
+      # loop with a conditional error, post-seal, while no_log replaces the module's real
+      # exception with "the output has been hidden". A single transient error would abort the
+      # whole wait, which is the opposite of what a budget of this size is for.
+      until: (__laps_credential_read__.result | default({})).escrowed | default(false) | bool
 
       ansible.windows.win_powershell:
         depth: 3
         error_action: 'stop'
         parameters:
           Identity: "{{ laps_credential_running.identity }}"
+          NotBefore: "{{ laps_credential_running.not_before }}"
         script: "{{ lookup('ansible.builtin.file', 'Get-LapsCredential.ps1') }}"
 
     #endregion --- [ Begin: Poll The Computer Object ] ---------------------------------------- #
