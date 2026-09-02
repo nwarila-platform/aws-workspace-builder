@@ -291,6 +291,12 @@ $Entries = @(
       }
       $Entry['product_id'] = $ProductId
 
+      # Where this registration LIVES, so a caller that must repair it can address it without
+      # guessing which of the two uninstall roots it came from. PowerShell's own PSPath carries a
+      # provider prefix no other tool accepts, so the registry path is composed from the root the
+      # scan is walking and the subkey name.
+      $Entry['registry_key'] = '{0}\{1}' -f $Root, $Key.PSChildName
+
       [PSCustomObject]$Entry
     }
   }
@@ -299,6 +305,38 @@ $Entries = @(
 # Sorted so the payload is diffable across runs: registry enumeration order is
 # not contractual, and an unstable list would look like drift to a reader.
 $Entries = @($Entries | Sort-Object -Property:@('DisplayVersion', 'InstallLocation'))
+
+# Windows hides a registration marked SystemComponent=1 from Programs and Features, and an
+# installer BUNDLE routinely registers twice under one name: itself, visible, plus the MSI it
+# wraps, hidden. Both are the same install, so a caller asking "is this product installed"
+# would otherwise be told the question is unanswerable. Reading Add/Remove Programs means
+# reading what Programs and Features shows, so a hidden registration is dropped whenever a
+# visible one exists.
+#
+# Hidden ones are KEPT when nothing else is registered: a product that only ever registers
+# hidden is still the product the caller asked about, and answering "absent" would be worse
+# than answering from the entry that is actually there.
+$VisibleEntries = @(
+  $Entries | Where-Object {
+    $SystemComponentProperty = $PSItem.PSObject.Properties['SystemComponent']
+    ($Null -eq $SystemComponentProperty) -or ([System.String]$SystemComponentProperty.Value -ne '1')
+  }
+)
+$ArpHidden = ($VisibleEntries.Count -eq 0) -and ($Entries.Count -gt 0)
+If (-not $ArpHidden) {
+  $Entries = $VisibleEntries
+}
+
+# The keys a caller must repair to put this product back in Programs and Features. Reported ONLY
+# when every registration is hidden -- when a visible one exists the product is already listed,
+# and unhiding the MSI a bundle wraps would put the same install in the list twice, which is the
+# ambiguity this script refuses to resolve.
+$HiddenRegistryKeys = [System.String[]]@()
+If ($ArpHidden) {
+  $HiddenRegistryKeys = [System.String[]]@(
+    $Entries | ForEach-Object { [System.String]$PSItem.registry_key } | Where-Object { $PSItem }
+  )
+}
 
 # Two registrations of one product cannot both own the install, and choosing between them would
 # be a guess. Refusing here rather than in each caller means every consumer inherits the same
@@ -320,6 +358,13 @@ If ($Ambiguous) {
 #
 # An unparseable or missing DisplayVersion is treated as 0.0.0.0: a registration that cannot say
 # what version it is cannot be trusted to be current.
+#
+# The registered version is PADDED to four parts before parsing, because System.Version treats a
+# missing component as -1: a vendor that registers "22.23.2" against a pin of 22.23.2.0 would
+# otherwise read as forever behind it, and the role would reinstall on every run. A vendor
+# omitting a trailing component means zero, not unknown, so "22.23.2" and "22.23.2.0" are one
+# version. The pin itself stays strictly four-part (the parameter contract above): padding the
+# machine's answer is reading, padding the operator's pin would be guessing.
 $InstalledVersion = [System.String]::Empty
 If ($Entries.Count -eq 1) {
   $DisplayVersionProperty = $Entries[0].PSObject.Properties['DisplayVersion']
@@ -328,8 +373,15 @@ If ($Entries.Count -eq 1) {
   }
 }
 
+$NormalizedVersion = $InstalledVersion
+If ($NormalizedVersion -match '^\d+(\.\d+){1,3}$') {
+  While (@($NormalizedVersion -split '\.').Count -lt 4) {
+    $NormalizedVersion = '{0}.0' -f $NormalizedVersion
+  }
+}
+
 $Installed = [System.Version]::new(0, 0, 0, 0)
-If (-not [System.Version]::TryParse($InstalledVersion, [Ref]$Installed)) {
+If (-not [System.Version]::TryParse($NormalizedVersion, [Ref]$Installed)) {
   $Installed = [System.Version]::new(0, 0, 0, 0)
 }
 
@@ -340,14 +392,16 @@ If (-not [System.Version]::TryParse($Version, [Ref]$Desired)) {
 
 # A read never changes the machine, so the verdict is NoChange on every path.
 $Result = [PSCustomObject]@{
-  action_required   = ($Entries.Count -eq 0) -or ($Installed -lt $Desired)
-  ambiguous         = $Ambiguous
-  changed           = $False
-  check_mode        = $Ansible.CheckMode
-  count             = $Entries.Count
-  entries           = $Entries
-  installed_version = $InstalledVersion
-  msg               = $Message
+  action_required      = ($Entries.Count -eq 0) -or ($Installed -lt $Desired)
+  ambiguous            = $Ambiguous
+  arp_hidden           = $ArpHidden
+  changed              = $False
+  check_mode           = $Ansible.CheckMode
+  count                = $Entries.Count
+  entries              = $Entries
+  hidden_registry_keys = $HiddenRegistryKeys
+  installed_version    = $InstalledVersion
+  msg                  = $Message
 }
 
 #endregion --- [ Main ] ---------------------------------------------------------------------- #

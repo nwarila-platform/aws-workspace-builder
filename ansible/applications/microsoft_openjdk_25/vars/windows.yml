@@ -4,10 +4,10 @@
 #
 # Windows-family overlay merged over microsoft_openjdk_25_defaults by the v3 loader.
 #
-# The catalog is a Windows artifact set, so the defaults are already the Windows values
-# and this overlay carries nothing. It exists because the loader resolves an OS overlay
-# per family; an empty map is the honest statement that this family needs no override,
-# rather than a duplicate of defaults that would drift.
+# This installer is a Windows-only artifact, so the defaults are already the Windows values and
+# this overlay carries nothing. It exists because the loader resolves an OS overlay per family;
+# an empty map is the honest statement that this family needs no override, rather than a
+# duplicate of defaults that would drift.
 #
 # =========================================================================================== #
 ---

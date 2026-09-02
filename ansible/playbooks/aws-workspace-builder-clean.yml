@@ -1,0 +1,46 @@
+# =========================================================================================== #
+# File: 'ansible/playbooks/aws-workspace-builder-clean.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# PREPARES A CONVERGED STAND-IN FOR IMAGE CAPTURE. The build playbook leaves a working desktop;
+# this one leaves something WorkSpaces will accept as an image, which is not the same machine.
+# AWS's Image Checker refuses a capture whose services are in the state a running desktop needs,
+# so the last thing done before capture is to give those up -- deliberately, in a run of its own,
+# after the build has been proven.
+#
+# WHY A SEPARATE PLAYBOOK RATHER THAN A FLAG ON THE BUILD. The clean state is destructive to the
+# running machine's usefulness: it stops the agent that manages it. Running it as part of the
+# build would mean every converge ended with a half-crippled desktop, and re-running the build to
+# fix something would silently undo the preparation. Two playbooks, run in order, keep both
+# outcomes deliberate -- and make the build safely repeatable while a stand-in is being iterated.
+#
+# ONLY ROLES THAT IMPLEMENT 'clean' BELONG HERE. The loader resolves <state>_<os>.yml and fails
+# loudly on a role that has no clean_windows.yml, which is the correct behaviour: a role is
+# listed here once it has decided what it must give up to be captured, and not before.
+#
+# Run it exactly like the build playbook, with COMPOSE_PLAYBOOK naming this file. The build's
+# proof should be green first: a machine that could not be converged should not be captured.
+#
+# =========================================================================================== #
+---
+#region ------ [ Play: Prepare The Stand-In For Capture ] ------------------------------------- #
+
+- name: 'PLAY | Prepare The Stand-In For Image Capture'
+  hosts: 'workspace_servers'
+  any_errors_fatal: true
+
+  #region ------ [ Roles ] -------------------------------------------------------------------- #
+  roles:
+
+    #region ------ [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
+    # "Amazon SSM Agent must be disabled -- The Create Image process requires the Amazon SSM
+    # Agent service to be disabled." The agent stays installed and ships with the image; what
+    # must not survive capture is a running one, whose registration is instance-specific.
+    - role: 'amazon_ssm_agent'
+      vars:
+        state: 'clean'
+    #endregion --- [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
+
+  #endregion --- [ Roles ] -------------------------------------------------------------------- #
+
+#endregion --- [ Play: Prepare The Stand-In For Capture ] ------------------------------------- #

@@ -1,0 +1,56 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/defaults/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Lowest-precedence configuration for the workspace_network_baseline role. The v3 loader merges
+# the OS overlay in vars/ over this map and publishes the result as
+# 'workspace_network_baseline_running'; tasks read only the merged map, never these keys.
+#
+# THE IMAGE'S NETWORK BASELINE, NOT A PRODUCT. A WorkSpace streams and is managed through its
+# management interface, and AWS documents the guest firewall openings that traffic requires: the
+# management channel and both streaming protocols, admitted from the management network range
+# and from nowhere else. On a real WorkSpace the agents that listen on these ports ship in the
+# bundle layer beneath the customer image; the stand-in carries no such agents, so these rules
+# sit inert here -- but they are part of the image contract this repository exists to prove, and
+# the BYOL image checker verifies exactly this posture.
+#
+# Everything here is an AWS-documented constant, which is why -- unlike the catalog roles -- the
+# playbook supplies nothing: there is no artifact, no version, and no deployment-specific value.
+#
+# =========================================================================================== #
+---
+workspace_network_baseline_defaults:
+
+  #region ------ [ The management network ] --------------------------------------------------- #
+
+  # The only source these rules admit. AWS attaches the management interface from this range in
+  # every commercial region; traffic from anywhere else has no business on these ports.
+  management:
+    cidr: '198.19.0.0/16'
+
+  #endregion --- [ The management network ] --------------------------------------------------- #
+
+  #region ------ [ The required openings ] ---------------------------------------------------- #
+
+  # One rule per documented requirement: the management/agent channel (8200), PCoIP streaming
+  # (4172 over both transports), and DCV streaming (4195 over both transports). Names are this
+  # role's own fixed identities, which is what makes a later run find and converge each rule
+  # rather than add a second one beside it.
+  rules:
+    - name: 'WorkSpaces Management Channel (TCP 8200-In)'
+      protocol: 'tcp'
+      port: 8200
+    - name: 'WorkSpaces PCoIP Streaming (TCP 4172-In)'
+      protocol: 'tcp'
+      port: 4172
+    - name: 'WorkSpaces PCoIP Streaming (UDP 4172-In)'
+      protocol: 'udp'
+      port: 4172
+    - name: 'WorkSpaces DCV Streaming (TCP 4195-In)'
+      protocol: 'tcp'
+      port: 4195
+    - name: 'WorkSpaces DCV Streaming (UDP 4195-In)'
+      protocol: 'udp'
+      port: 4195
+
+  #endregion --- [ The required openings ] ---------------------------------------------------- #

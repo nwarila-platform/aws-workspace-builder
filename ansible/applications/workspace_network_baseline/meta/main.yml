@@ -1,0 +1,29 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/meta/main.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for workspace_network_baseline. Description-only (style guide 8): NOT an
+# enforcing argument spec. The role's tasks/validate.yml enforces its merged-config guards.
+#
+# NO REQUIRED INPUTS. Unlike the catalog product roles there is no artifact and no pin: every
+# value is an AWS-documented constant carried in defaults, and the playbook invokes the role
+# bare. Override management.cidr or the rules list only to track a change in AWS's own
+# documentation.
+# =========================================================================================== #
+---
+galaxy_info:
+  role_name: 'workspace_network_baseline'
+  namespace: 'nwarila_platform'
+  author: 'nwarila-platform'
+  description: >-
+    The WorkSpace image's guest firewall baseline: the management channel and both streaming
+    protocols opened to the AWS management network range alone, converged idempotently and
+    proven by reading the firewall back. The posture the BYOL image checker inspects.
+  license: 'MIT'
+  min_ansible_version: '2.17'
+  platforms:
+    - name: 'Windows'
+      versions:
+        - '2022'
+  galaxy_tags: ['windows', 'firewall', 'workspaces']
+
+dependencies: []

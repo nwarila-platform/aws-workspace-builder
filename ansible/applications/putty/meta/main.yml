@@ -1,10 +1,23 @@
 # =========================================================================================== #
 # File: '{{ role_path }}/meta/main.yml'
 # --- [ Description ] ----------------------------------------------------------------------- #
+# Role metadata for putty. Description-only (style guide 8): NOT an enforcing argument
+# spec. The role's tasks/validate.yml enforces its merged-config guards.
 #
-# Role metadata for the putty STUB. Description-only: NOT an enforcing argument spec.
-# The finished role's tasks/validate.yml will enforce its merged-config guards.
+# REQUIRED INPUTS — declared empty in defaults and supplied by the playbook.
 #
+# These are deployment-specific: the installer bucket carries an account id, and the pinned
+# version and digest change with every artifact drop. Concrete defaults would ship one site's
+# values as if they were universally safe, so the playbook states them where a reader can see
+# what is installed.
+#
+#   putty.installer.bucket   S3 bucket holding the installer (the application repository).
+#   putty.installer.version  Four-part product version the installer delivers; the role
+#                                    compares it against Add/Remove Programs to stay idempotent.
+#   putty.installer.sha256   Lowercase 64-character digest of that object. Verified on the
+#                                    GUEST immediately before execution — the copy that runs.
+#
+# The controller resolves the artifact from S3. The guest is never given cloud credentials.
 # =========================================================================================== #
 ---
 galaxy_info:
@@ -12,15 +25,16 @@ galaxy_info:
   namespace: 'nwarila_platform'
   author: 'nwarila-platform'
   description: >-
-    STUB reserving the WorkSpace image catalog product 'Simon-Tatham_PuTTY' at fleet pin 0.84.0.0. The
-    present leg refuses loudly until the role is finished from the google_chrome pattern and
-    its artifact lands in the application repository.
+    PuTTY installation for the Windows WorkSpace image, following the catalog pattern
+    putty sets as the exemplar. Fetches the pinned installer from S3 through the controller,
+    verifies its digest on the guest before executing it, and installs silently. Idempotent on the
+    product's Add/Remove Programs registration at or above the pinned version.
   license: 'MIT'
   min_ansible_version: '2.17'
   platforms:
     - name: 'Windows'
       versions:
         - '2022'
-  galaxy_tags: ['windows', 'software', 'stub']
+  galaxy_tags: ['windows', 'software']
 
 dependencies: []

@@ -297,6 +297,87 @@ Describe 'Get-InstalledSoftware' {
       $Result.entries[0].product_id | Should -BeNullOrEmpty
     }
 
+    It 'reads past a bundle that also registers its own MSI, hidden' {
+      # The real shape this exists for: an installer bundle registers itself (visible) and the
+      # MSI it wraps (SystemComponent=1, hidden from Programs and Features) under one name and
+      # one version. Both are the same install, so the read must answer rather than refuse.
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'Amazon SSM Agent'; DisplayVersion = '3.3.4851.0'; SystemComponent = 1
+        PSChildName = '{1C1593B7-10E6-4745-9E59-8FB311CC92F4}'
+      }
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'Amazon SSM Agent'; DisplayVersion = '3.3.4851.0'
+        PSChildName = '{a535ae3f-ae28-4e8a-9174-b918c3355ee0}'
+      }
+
+      $Result = & $script:ScriptPath -DisplayName 'Amazon SSM Agent' -Version '3.3.4851.0' | ConvertFrom-Json
+
+      $Result.ambiguous | Should -BeFalse
+      $Result.count | Should -Be 1
+      $Result.action_required | Should -BeFalse
+      # The VISIBLE registration is the one kept -- the bundle, not the wrapped MSI.
+      $Result.entries[0].product_id | Should -Be '{a535ae3f-ae28-4e8a-9174-b918c3355ee0}'
+    }
+
+    It 'still answers from a hidden registration when it is the only one' {
+      # Dropping it would report a present product as absent, which is worse than reading it.
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'PDQ Deploy'; DisplayVersion = '20.1.8.0'; SystemComponent = 1
+      }
+
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
+
+      $Result.count | Should -Be 1
+      $Result.action_required | Should -BeFalse
+    }
+
+    It 'reports the keys to repair when the product is hidden from Add/Remove Programs' {
+      # A product registered only as SystemComponent does not appear in Programs and Features, so
+      # inventory tooling that reads ARP cannot see it. The read names the keys; repairing them is
+      # the caller's job, because a read never changes the machine.
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'PDQ Deploy'; DisplayVersion = '20.1.8.0'; SystemComponent = 1
+        PSChildName = '{4E9FA177-A200-4DFC-9DC6-9D0290FCAAC2}'
+      }
+
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
+
+      $Result.arp_hidden | Should -BeTrue
+      $Result.hidden_registry_keys | Should -HaveCount 1
+      $Result.hidden_registry_keys[0] | Should -Be ($script:Native + '\{4E9FA177-A200-4DFC-9DC6-9D0290FCAAC2}')
+    }
+
+    It 'names no keys to repair when a visible registration already exists' {
+      # The bundle is listed, so the product is not hidden. Unhiding the MSI it wraps would put one
+      # install in the list twice and make the next read ambiguous.
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'Amazon SSM Agent'; DisplayVersion = '3.3.4851.0'; SystemComponent = 1
+        PSChildName = '{1C1593B7-10E6-4745-9E59-8FB311CC92F4}'
+      }
+      $global:FakeRegistry[$script:Native] += @{
+        DisplayName = 'Amazon SSM Agent'; DisplayVersion = '3.3.4851.0'
+        PSChildName = '{a535ae3f-ae28-4e8a-9174-b918c3355ee0}'
+      }
+
+      $Result = & $script:ScriptPath -DisplayName 'Amazon SSM Agent' -Version '3.3.4851.0' | ConvertFrom-Json
+
+      $Result.arp_hidden | Should -BeFalse
+      $Result.hidden_registry_keys | Should -HaveCount 0
+    }
+
+    It 'still refuses when two VISIBLE registrations claim the same product' {
+      # The hidden-entry rule must not become a way to silently pick one of two real installs.
+      $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '20.1.8.0' }
+      $global:FakeRegistry[$script:Wow] = @(
+        @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '19.3.254.0' }
+      )
+
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
+
+      $Result.ambiguous | Should -BeTrue
+      $Result.count | Should -Be 2
+    }
+
     It 'refuses to answer when two registrations claim the same product' {
       $global:FakeRegistry[$script:Native] += @{
         DisplayName = 'PDQ Deploy'; DisplayVersion = '20.1.8.0'
@@ -342,6 +423,29 @@ Describe 'Get-InstalledSoftware' {
       $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '21.0.0.0' }
       $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '20.1.8.0' | ConvertFrom-Json
       $Result.action_required | Should -BeFalse
+    }
+
+    It 'pads a short registered version before comparing, so "22.23.2" meets a pin of 22.23.2.0' {
+      # System.Version reads a missing component as -1, so without padding a vendor that
+      # registers three parts would sit forever "behind" the four-part pin and reinstall on
+      # every run. A vendor omitting a trailing component means zero, not unknown.
+      $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '22.23.2' }
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '22.23.2.0' | ConvertFrom-Json
+      $Result.action_required | Should -BeFalse
+      # The report carries the machine's answer verbatim; only the comparison pads.
+      $Result.installed_version | Should -Be '22.23.2'
+    }
+
+    It 'pads a two-part registered version the same way' {
+      $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '26.02' }
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '26.2.0.0' | ConvertFrom-Json
+      $Result.action_required | Should -BeFalse
+    }
+
+    It 'still reports action when the padded short version is genuinely behind the pin' {
+      $global:FakeRegistry[$script:Native] += @{ DisplayName = 'PDQ Deploy'; DisplayVersion = '22.23.2' }
+      $Result = & $script:ScriptPath -DisplayName 'PDQ Deploy' -Version '22.23.2.1' | ConvertFrom-Json
+      $Result.action_required | Should -BeTrue
     }
 
     It 'treats an unparseable installed version as needing action' {

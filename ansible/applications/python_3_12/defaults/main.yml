@@ -2,18 +2,89 @@
 # File: '{{ role_path }}/defaults/main.yml'
 # --- [ Description ] ----------------------------------------------------------------------- #
 #
-# Lowest-precedence configuration for the python_3_12 STUB. The v3 loader merges the OS
-# overlay in vars/ over this map and publishes the result as 'python_3_12_running'.
+# Lowest-precedence configuration for the python_3_12 role. The v3 loader merges the OS overlay in
+# vars/ over this map and publishes the result as 'python_3_12_running'; tasks read only the merged
+# map, never these keys directly.
 #
-# STUB: the map carries only the catalog target this role reserves. The key is the
-# fleet's <Publisher>_<Product> catalog identity and the version is the ratified fleet
-# pin; both are re-measured when the artifact lands in the application repository and
-# the role is finished from the google_chrome pattern.
+# This role follows THE CATALOG PATTERN google_chrome sets as the exemplar: an ARP identity, a
+# staging location, a bounded install, and an artifact layout keyed by <version>. See that
+# role's defaults for the full rationale; only the product values differ here.
+#
+# The deployment-specific inputs -- bucket, pinned version, digest -- are supplied by the
+# PLAYBOOK, where they are visible and changeable. See meta/main.yml and tasks/validate.yml.
 #
 # =========================================================================================== #
 ---
 python_3_12_defaults:
 
-  catalog:
-    key: 'Python-Software-Foundation_Python-3.12'
-    version: '3.12.10150.0'
+  #region ------ [ Install ] ------------------------------------------------------------------ #
+
+  install:
+    # Staging directory on the guest. The installer is removed from here after execution. A site
+    # whose application control trusts only named paths overrides this to one of them.
+    staging_dir: 'C:\Windows\Temp\python-3-12-install'
+
+    # A wrong silent switch can leave the installer waiting on a dialog instead of returning.
+    # Bounding it here fails the run inside Ansible rather than hanging the play.
+    timeout_seconds: 900
+
+    # THE VENDOR TAKES AN ANSWER FILE, AND THIS IS IT. python.org's installer reads a file named
+    # unattend.xml sitting ALONGSIDE THE EXECUTABLE and takes every option from it, which is why
+    # the command line below carries only /quiet: the options are configuration, and configuration
+    # belongs in a file the vendor documents rather than in a switch string. Each role stages into
+    # its own directory, so five interpreters never share one answer file.
+    #
+    # Written as <Option Name="..." Value="..."/>: a value given as an ATTRIBUTE is converted to a
+    # number where it can be, which is what these 0/1 flags are.
+    mode: '/quiet'
+    options:
+      # System-wide, because this is an image rather than one person's desktop.
+      InstallAllUsers: 1
+
+      # PATH and the file associations are left alone: the image carries FIVE interpreters, and
+      # the last one installed would otherwise silently become 'python' for every user. Callers
+      # select a version explicitly, by path or by the launcher.
+      PrependPath: 0
+      AssociateFiles: 0
+      Shortcuts: 0
+
+      # The Python Launcher is one shared, machine-wide component. Five roles installing it would
+      # be five roles owning one file, so no catalog role installs it; a deployment that wants it
+      # gives it to exactly one role, in the playbook.
+      Include_launcher: 0
+      InstallLauncherAllUsers: 0
+
+      # What the interpreter needs to be useful, and nothing that only a reader needs: the docs
+      # and the test suite are image weight for a desktop that has the internet.
+      Include_pip: 1
+      Include_tcltk: 1
+      Include_dev: 1
+      Include_doc: 0
+      Include_test: 0
+
+  #endregion --- [ Install ] ------------------------------------------------------------------ #
+
+  #region ------ [ Product identity ] --------------------------------------------------------- #
+
+  # The Python installer is a BUNDLE: it registers one Add/Remove Programs entry per
+  # component (Core Interpreter, Standard Library, Executables, ...), not one for the
+  # product. The Core Interpreter entry is the one that means the interpreter is present,
+  # and it carries the same version the bundle does.
+  #
+  # Install state is read from Add/Remove Programs, not from the vendor's own key. The ARP entry
+  # carries the version AND the install location, is a documented Windows contract rather than a
+  # vendor implementation detail, and is removed on uninstall by definition.
+  arp:
+    display_name: 'Python 3.12.10 Core Interpreter (64-bit)'
+
+  #endregion --- [ Product identity ] --------------------------------------------------------- #
+
+  #region ------ [ Installer layout ] --------------------------------------------------------- #
+
+  # The application-repository object key, keyed by the pinned version the playbook supplies.
+  # The vendor folder is named exactly as the product's ARP Publisher spells it, per the org
+  # apprepo convention.
+  installer:
+    path: 'Python Software Foundation/Python 3.12/<version>/python-3.12.10-amd64.exe'
+
+  #endregion --- [ Installer layout ] --------------------------------------------------------- #

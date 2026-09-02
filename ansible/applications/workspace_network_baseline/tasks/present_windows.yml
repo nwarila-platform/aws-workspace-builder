@@ -1,0 +1,102 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/present_windows.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Converges the guest firewall openings AWS requires of a WorkSpace image: the management
+# channel and both streaming protocols, admitted from the management network range alone. This
+# role carries the catalog's three-stage shape without its installer stages -- there is no
+# artifact and no version, only host state -- so PROCESS is the converge and END is the proof.
+#
+# The rules are scoped to the management CIDR at the HOST level, unlike the OpenSSH rule, which
+# leaves source-scoping to the security group: the security group cannot speak for a WorkSpace
+# in production, so the posture the BYOL checker inspects must be complete on the guest itself.
+#
+# END is deliberately ungated, so a converged host proves the same state as a freshly built one.
+#
+# =========================================================================================== #
+---
+#region ------ [ Process: The Required Openings ] --------------------------------------------- #
+
+- name: 'PROCESS | Converge The Management-Interface Firewall Rules'
+
+  # Begin The 'Process' Block
+  block:
+
+    #region ------ [ Process: One Rule Per Documented Requirement ] --------------------------- #
+    # The module converges by the rule's fixed name, so a drifted rule -- wrong port, wrong
+    # source, disabled -- is repaired in place rather than duplicated. remoteip is the whole
+    # point: these ports open to the management network and to nothing else.
+
+    - name: 'PROCESS | Open The Port To The Management Network Alone'
+      loop: "{{ workspace_network_baseline_running.rules }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+      community.windows.win_firewall_rule:
+        action: 'allow'
+        direction: 'in'
+        enabled: true
+        localport: "{{ item.port }}"
+        name: "{{ item.name }}"
+        profiles: [ 'domain', 'private', 'public' ]
+        protocol: "{{ item.protocol }}"
+        remoteip: "{{ workspace_network_baseline_running.management.cidr }}"
+        state: 'present'
+
+    #endregion --- [ Process: One Rule Per Documented Requirement ] --------------------------- #
+
+#endregion --- [ Process: The Required Openings ] --------------------------------------------- #
+
+
+#region ------ [ End: Prove The Posture ] ----------------------------------------------------- #
+
+- name: 'END | Prove The Posture'
+
+  # Begin The 'End' Block
+  block:
+
+    #region ------ [ End: Re-Read Every Rule ] ------------------------------------------------ #
+    # The proof reads the firewall back by the same names PROCESS converged, and fails on any
+    # rule that is missing or disabled: the module's exit status is its opinion, the firewall
+    # state is the machine's. Parameters cross as typed module options, never Jinja spliced into
+    # the script source. A read never changes anything, and says so.
+
+    - name: 'END | Prove Every Required Rule Is Present And Enabled'
+      register: '__workspace_network_baseline_proof__'
+
+      ansible.windows.win_powershell:
+        depth: 3
+        error_action: 'stop'
+        parameters:
+          Names: "{{ workspace_network_baseline_running.rules | map(attribute='name') | list }}"
+        script: |
+          [CmdletBinding()]
+          Param ([System.String[]]$Names)
+          $Missing = [System.Collections.Generic.List[System.String]]::new()
+          ForEach ($Name In $Names) {
+            $Rule = Get-NetFirewallRule -DisplayName:$Name -ErrorAction:'SilentlyContinue'
+            If ($Null -eq $Rule -or [System.String]$Rule.Enabled -ne 'True') {
+              $Missing.Add($Name)
+            }
+          }
+          $Ansible.Changed = $False
+          $Ansible.Result = @{ missing = $Missing.ToArray(); proven = ($Missing.Count -eq 0) }
+          If ($Missing.Count -gt 0) {
+            Throw ('Rules missing or disabled after converge: {0}' -f ($Missing -join ', '))
+          }
+
+    #endregion --- [ End: Re-Read Every Rule ] ------------------------------------------------ #
+
+    #region ------ [ End: Assert The Proof Held ] --------------------------------------------- #
+
+    - name: 'END | Assert The Proof Held'
+      ansible.builtin.assert:
+        fail_msg: >-
+          The firewall read-back reported rules missing or disabled:
+          {{ __workspace_network_baseline_proof__.result.missing | default([]) | join(', ') }}.
+        quiet: true
+        that: [ __workspace_network_baseline_proof__.result.proven | default(false) ]
+
+    #endregion --- [ End: Assert The Proof Held ] --------------------------------------------- #
+
+#endregion --- [ End: Prove The Posture ] ----------------------------------------------------- #

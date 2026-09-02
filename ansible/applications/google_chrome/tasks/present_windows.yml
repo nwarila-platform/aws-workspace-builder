@@ -246,6 +246,30 @@
 
     #endregion --- [ End: Re-Read The Installed Product ] ------------------------------------- #
 
+    #region ------ [ End: Put The Product Back In Add/Remove Programs ] ----------------------- #
+    # A registration marked SystemComponent is HIDDEN from Programs and Features, and anything
+    # that inventories a machine by reading Add/Remove Programs -- which is how this fleet knows
+    # what it is running -- cannot see it. An image whose software is invisible to inventory is
+    # not a managed image, so the flag is cleared rather than tolerated.
+    #
+    # The read above names keys ONLY when every registration of this product is hidden. Where a
+    # visible one already exists the list is empty and this loop does nothing: unhiding the MSI
+    # an installer bundle wraps would list one install twice and make the next read ambiguous.
+
+    - name: 'END | Unhide The Registration From Add/Remove Programs'
+      loop: "{{ __google_chrome_final_arp__.result.hidden_registry_keys | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+
+      ansible.windows.win_regedit:
+        data: 0
+        name: 'SystemComponent'
+        path: "{{ item }}"
+        state: 'present'
+        type: 'dword'
+
+    #endregion --- [ End: Put The Product Back In Add/Remove Programs ] ----------------------- #
+
     #region ------ [ End: Prove The Product Is Registered ] ----------------------------------- #
     # Zero entries means the installer reported success without registering the product, which
     # is the failure this postcondition exists to catch: an exit code is the installer's

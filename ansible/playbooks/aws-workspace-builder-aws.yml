@@ -638,6 +638,332 @@
             private_ip: "{{ aws_private_ip_address }}"
     #endregion --- [ Roles: Workspace Builder ] ----------------------------------------------- #
 
+    #region ------ [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
+    # The AMI already carries this agent, so on a current image the role reads, finds the pin
+    # satisfied and installs nothing. It is listed because the image must STATE what it carries:
+    # a future AMI without it converges to the same place. Its 'clean' state -- disabling the
+    # service, which image capture requires -- lives in aws-workspace-builder-clean.yml.
+    - role: 'amazon_ssm_agent'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        amazon_ssm_agent:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '3.3.4851.0'
+            sha256: '964ef39b74aedf43ee40c1f9aebd7b4f2236e4a7802e5bb17a93289821ba3999'
+    #endregion --- [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
+
+    #region ------ [ Roles: Workspace Network Baseline ] -------------------------------------- #
+    # The image's network posture, not a product: the guest firewall openings AWS requires of a
+    # WorkSpace (management channel and both streaming protocols, admitted from the management
+    # network range alone). Every value is an AWS-documented constant, so the role is invoked
+    # bare; see its defaults for the rationale and the BYOL-checker connection.
+    - role: 'workspace_network_baseline'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+    #endregion --- [ Roles: Workspace Network Baseline ] -------------------------------------- #
+
+    #region ------ [ Roles: Google Chrome ] --------------------------------------------------- #
+    # First catalog product, and the pattern's exemplar (see the role's defaults/main.yml). The
+    # pins say exactly what the image carries: version and sha256 move TOGETHER when a new
+    # artifact lands at the versioned key in the application repository. Gated like the seal
+    # roles: a host being torn down does not need software converged on the way out.
+    - role: 'google_chrome'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        google_chrome:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '152.0.7977.76'
+            sha256: 'b62295897570e665b67bdd7254bc46acb00de8026dc93465b4df781a2c10ca12'
+    #endregion --- [ Roles: Google Chrome ] --------------------------------------------------- #
+
+    #region ------ [ Roles: Seven Zip ] ----------------------------------------------------------------- #
+    - role: 'seven_zip'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        seven_zip:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '26.02.00.0'
+            sha256: 'db407a4f6d4999e5c7bc00ce8a882be94717b56e7fa68140fe3f12605d91643e'
+    #endregion --- [ Roles: Seven Zip ] ----------------------------------------------------------------- #
+
+    #region ------ [ Roles: Powershell 7 ] -------------------------------------------------------------- #
+    - role: 'powershell_7'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        powershell_7:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '7.6.5.0'
+            sha256: '3a87c24e044ec792047d734c841917ee4323a535e25f645ae6c33141a35fca8d'
+    #endregion --- [ Roles: Powershell 7 ] -------------------------------------------------------------- #
+
+    #region ------ [ Roles: AWS Cli V2 ] ---------------------------------------------------------------- #
+    - role: 'aws_cli_v2'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        aws_cli_v2:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '2.36.31.0'
+            sha256: 'f111c93d158f7c55ed3bf6f2ee9e031fb75b1fce3eccc604519ffdea2810c1fa'
+    #endregion --- [ Roles: AWS Cli V2 ] ---------------------------------------------------------------- #
+
+    #region ------ [ Roles: Nodejs 22 ] ----------------------------------------------------------------- #
+    - role: 'nodejs_22'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        nodejs_22:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '22.23.2.0'
+            sha256: 'ce9572ae220c345fbae2340bbb4d084e8ca5e0fe093ee7067d43094ae23be989'
+    #endregion --- [ Roles: Nodejs 22 ] ----------------------------------------------------------------- #
+
+    #region ------ [ Roles: Mozilla Firefox Esr ] ------------------------------------------------------- #
+    - role: 'mozilla_firefox_esr'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        mozilla_firefox_esr:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '140.15.0.0'
+            sha256: 'ef17e2f7ec5186c837ac53bd647f00ba89e8865f9851d01769d302f80f977397'
+    #endregion --- [ Roles: Mozilla Firefox Esr ] ------------------------------------------------------- #
+
+    #region ------ [ Roles: Windows Exporter ] ---------------------------------------------------------- #
+    - role: 'windows_exporter'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        windows_exporter:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '0.31.8.0'
+            sha256: '0aadce6afb20182b678bfca9e8f2e8464ef48c469b28b4cf02e99d82158f5d40'
+    #endregion --- [ Roles: Windows Exporter ] ---------------------------------------------------------- #
+
+    #region ------ [ Roles: Microsoft Edge ] ------------------------------------------------------------ #
+    - role: 'microsoft_edge'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        microsoft_edge:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '152.0.4191.53'
+            sha256: '17b704410ae47e33f830230503affed39ba8ed36356e90f0cf6759231543a22c'
+    #endregion --- [ Roles: Microsoft Edge ] ------------------------------------------------------------ #
+
+    #region ------ [ Roles: Putty ] --------------------------------------------------------------------- #
+    - role: 'putty'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        putty:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '0.85.0.0'
+            sha256: '2213ebacf962b709411d654a40087508a694756bc4e41c5a1c24ad86596b2511'
+    #endregion --- [ Roles: Putty ] --------------------------------------------------------------------- #
+
+    #region ------ [ Roles: Microsoft Openjdk 17 ] ------------------------------------------------------ #
+    - role: 'microsoft_openjdk_17'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        microsoft_openjdk_17:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '17.0.20.101'
+            sha256: '38599e2961026250937e114df06fb3334510e84daed55167398935c564eed8a7'
+    #endregion --- [ Roles: Microsoft Openjdk 17 ] ------------------------------------------------------ #
+
+    #region ------ [ Roles: Notepad Plus Plus ] --------------------------------------------------------- #
+    - role: 'notepad_plus_plus'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        notepad_plus_plus:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '8.9.8.0'
+            sha256: '7b2a949bf460fb37a3888c9048698f43222a185a48323023df1c51e78a3ca1c2'
+    #endregion --- [ Roles: Notepad Plus Plus ] --------------------------------------------------------- #
+
+    #region ------ [ Roles: Git ] ----------------------------------------------------------------------- #
+    - role: 'git'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        git:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '2.55.0.0'
+            sha256: '0c66e4a5875da5a74f9754386de7555ba301503b03bbdcdbafa69dc6464e548d'
+    #endregion --- [ Roles: Git ] ----------------------------------------------------------------------- #
+
+    #region ------ [ Roles: Winscp ] -------------------------------------------------------------------- #
+    - role: 'winscp'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        winscp:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '6.5.6.0'
+            sha256: '4488c493bafca6af4e7ae54ed39cb71479e65dc192c4d1a471647bf9cb9d6db0'
+    #endregion --- [ Roles: Winscp ] -------------------------------------------------------------------- #
+
+    #region ------ [ Roles: Visual Studio Code ] -------------------------------------------------------- #
+    - role: 'visual_studio_code'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        visual_studio_code:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '1.136.0.0'
+            sha256: 'a973b24b3f4479bf54ba2693a9f9e50e7254deab147220ea0e15ef974a66b098'
+    #endregion --- [ Roles: Visual Studio Code ] -------------------------------------------------------- #
+
+    #region ------ [ Roles: Windows Desktop Runtime ] --------------------------------------------------- #
+    - role: 'windows_desktop_runtime'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        windows_desktop_runtime:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '10.0.11.0'
+            sha256: '61d2e1447b185d6f99c0d5799896240b48246f5440648bc031ebdb159a3bf3d1'
+    #endregion --- [ Roles: Windows Desktop Runtime ] --------------------------------------------------- #
+
+    #region ------ [ Roles: Microsoft Openjdk 11 ] ------------------------------------------------------ #
+    - role: 'microsoft_openjdk_11'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        microsoft_openjdk_11:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '11.0.32.101'
+            sha256: 'e325d93d63bd194a594724abe34e7c5b8e77da47c7519952396243503347c7df'
+    #endregion --- [ Roles: Microsoft Openjdk 11 ] ------------------------------------------------------ #
+
+    #region ------ [ Roles: Microsoft Openjdk 21 ] ------------------------------------------------------ #
+    - role: 'microsoft_openjdk_21'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        microsoft_openjdk_21:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '21.0.12.101'
+            sha256: '3a3f7e1a9fd9edd1fcc0545ffbe7dc87787a8417dc1bf303e41c7a697c8490c1'
+    #endregion --- [ Roles: Microsoft Openjdk 21 ] ------------------------------------------------------ #
+
+    #region ------ [ Roles: Microsoft Openjdk 25 ] ------------------------------------------------------ #
+    - role: 'microsoft_openjdk_25'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        microsoft_openjdk_25:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '25.0.4.101'
+            sha256: 'a7c4cee7c626e6947357a0bfb21bf8bf740f063daaea4a15e4775c5b37f87cc6'
+    #endregion --- [ Roles: Microsoft Openjdk 25 ] ------------------------------------------------------ #
+
+
+    #region ------ [ Roles: Python 3 10 ] --------------------------------------------------------------- #
+    - role: 'python_3_10'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        python_3_10:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '3.10.11150.0'
+            sha256: 'd8dede5005564b408ba50317108b765ed9c3c510342a598f9fd42681cbe0648b'
+    #endregion --- [ Roles: Python 3 10 ] --------------------------------------------------------------- #
+
+    #region ------ [ Roles: Python 3 11 ] --------------------------------------------------------------- #
+    - role: 'python_3_11'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        python_3_11:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '3.11.9150.0'
+            sha256: '5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde'
+    #endregion --- [ Roles: Python 3 11 ] --------------------------------------------------------------- #
+
+    #region ------ [ Roles: Python 3 12 ] --------------------------------------------------------------- #
+    - role: 'python_3_12'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        python_3_12:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '3.12.10150.0'
+            sha256: '67b5635e80ea51072b87941312d00ec8927c4db9ba18938f7ad2d27b328b95fb'
+    #endregion --- [ Roles: Python 3 12 ] --------------------------------------------------------------- #
+
+    #region ------ [ Roles: Python 3 13 ] --------------------------------------------------------------- #
+    - role: 'python_3_13'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        python_3_13:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '3.13.15150.0'
+            sha256: 'edec09c4853aeae9ac36efb8c9f95b6b8e2fee65eee56d9767a8b7c69c574403'
+    #endregion --- [ Roles: Python 3 13 ] --------------------------------------------------------------- #
+
+    #region ------ [ Roles: Python 3 14 ] --------------------------------------------------------------- #
+    - role: 'python_3_14'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        python_3_14:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '3.14.7150.0'
+            sha256: '9d9eb2709ef81bf5cd30db3c2096bdbc4ea10087c22e62f27d356b36f6ae9649'
+    #endregion --- [ Roles: Python 3 14 ] --------------------------------------------------------------- #
+
+    #region ------ [ Roles: Microsoft Visual C V14 ] ---------------------------------------------------- #
+    - role: 'microsoft_visual_c_v14'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        microsoft_visual_c_v14:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '14.44.35211.0'
+            sha256: 'cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b'
+    #endregion --- [ Roles: Microsoft Visual C V14 ] ---------------------------------------------------- #
+
+    #region ------ [ Roles: Adobe Acrobat Reader Dc ] --------------------------------------------------- #
+    - role: 'adobe_acrobat_reader_dc'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        adobe_acrobat_reader_dc:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '26.1.21789.0'
+            sha256: 'f285a73605be56b07b21e7e57e4c55a15e65e513ef2316436a1d36adfa69e83b'
+    #endregion --- [ Roles: Adobe Acrobat Reader Dc ] --------------------------------------------------- #
+
+    #region ------ [ Roles: Remote Desktop Manager ] ---------------------------------------------------- #
+    - role: 'remote_desktop_manager'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        remote_desktop_manager:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '2026.2.18.0'
+            sha256: '36476c810b58d0faa4c6007e3f897b43ddcae7154f59acbe428bbc9ec547847e'
+    #endregion --- [ Roles: Remote Desktop Manager ] ---------------------------------------------------- #
+
+    #region ------ [ Roles: Amazon Ec2Launch ] ---------------------------------------------------------- #
+    - role: 'amazon_ec2launch'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        amazon_ec2launch:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '2.5.2.0'
+            sha256: 'e24c45393e6ef4c2c148aa56c03c5fe8f94da3f7762371fb298435e2d8fe0426'
+    #endregion --- [ Roles: Amazon Ec2Launch ] ---------------------------------------------------------- #
+
   #endregion --- [ Roles ] -------------------------------------------------------------------- #
 
 #endregion --- [ Play: The WorkSpace Stand-In ] ----------------------------------------------- #

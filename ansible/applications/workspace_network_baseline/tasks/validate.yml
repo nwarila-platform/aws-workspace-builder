@@ -1,0 +1,35 @@
+# =========================================================================================== #
+# File: '{{ role_path }}/tasks/validate.yml'
+# --- [ Description ] ----------------------------------------------------------------------- #
+#
+# Validates the merged network-baseline configuration after the v3 loader merge, on the
+# CONTROLLER, before anything touches the guest. Everything is defaulted from AWS-documented
+# constants, so what is enforced here is that an override kept the shape those constants have.
+#
+# =========================================================================================== #
+---
+- name: 'VALIDATE | Require The Management Network And The Openings'
+  ansible.builtin.assert:
+    that:
+      - >-
+        workspace_network_baseline_running.management.cidr | default('')
+        is match('^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$')
+      - workspace_network_baseline_running.rules | default([]) | length > 0
+    fail_msg: >-
+      Refusing to continue: the management network must be a CIDR and at least one required
+      opening must be declared. See defaults/main.yml.
+    quiet: true
+
+- name: 'VALIDATE | Require Every Rule To Be Whole'
+  loop: "{{ workspace_network_baseline_running.rules }}"
+  loop_control:
+    label: "{{ item.name | default('<unnamed>') }}"
+  ansible.builtin.assert:
+    that:
+      - item.name | default('') | length > 0
+      - item.protocol | default('') in ['tcp', 'udp']
+      - item.port | default(0) | int > 0
+    fail_msg: >-
+      Refusing to continue: every rule needs a fixed name, a tcp/udp protocol, and a port. A
+      nameless rule cannot be converged in place and would duplicate on every run.
+    quiet: true
