@@ -2,19 +2,39 @@
 # File: '{{ role_path }}/tasks/validate.yml'
 # --- [ Description ] ----------------------------------------------------------------------- #
 #
-# Validates the merged STUB configuration after the v3 loader merge, on the CONTROLLER.
-# The full input contract arrives when the role is finished from the google_chrome
-# pattern; until then the one thing worth proving is that the stub still names its
-# catalog target.
+# Validates load-bearing the Amazon CloudWatch Agent configuration after the v3 loader merge, on the
+# CONTROLLER, before anything touches the guest. The artifact inputs are supplied by the
+# playbook rather than defaulted, so this is where a missing or malformed one is caught — in a
+# second, rather than mid-converge at the cost of an instance.
+#
+# meta/main.yml describes these inputs; this file is what enforces them.
 #
 # =========================================================================================== #
 ---
-- name: 'VALIDATE | Require The Catalog Target This Stub Reserves'
+- name: 'VALIDATE | Require The Inputs Every State Uses'
   ansible.builtin.assert:
     that:
-      - amazon_cloudwatch_agent_running.catalog.key | default('') | length > 0
-      - amazon_cloudwatch_agent_running.catalog.version | default('') | length > 0
+      - amazon_cloudwatch_agent_running.arp.display_name | default('') | length > 0
+      - amazon_cloudwatch_agent_running.installer.version | default('') is match('^[0-9]+(\\.[0-9]+){3}$')
+      - amazon_cloudwatch_agent_running.install.staging_dir is match('^[A-Za-z]:\\\\')
     fail_msg: >-
-      Refusing to continue: the stub must name the catalog product it reserves (catalog.key and
-      catalog.version). See README.md.
+      Refusing to continue: arp.display_name, a four-part installer.version, and an absolute,
+      drive-letter-rooted Windows install.staging_dir are required for every state. See
+      meta/main.yml.
+    quiet: true
+
+- name: 'VALIDATE | Require The Artifact Source Inputs'
+  when: (state | default('present') | string | lower | trim) == 'present'
+  ansible.builtin.assert:
+    that:
+      - amazon_cloudwatch_agent_running.installer.bucket | default('') | length > 0
+      - amazon_cloudwatch_agent_running.installer.path | default('') | length > 0
+      - amazon_cloudwatch_agent_running.installer.sha256 | default('') is match('^[0-9a-f]{64}$')
+      - amazon_cloudwatch_agent_running.install.timeout_seconds | int > 0
+    fail_msg: >-
+      Refusing to deploy: a required input is missing or malformed. The playbook must supply the
+      installer bucket, the versioned object key, and the lowercase 64-char sha256 of that exact
+      object; the digest is verified on the GUEST immediately before the installer executes. A
+      role wired into the play before its artifact lands in the application repository fails
+      here, on the controller, at zero cost. See meta/main.yml.
     quiet: true

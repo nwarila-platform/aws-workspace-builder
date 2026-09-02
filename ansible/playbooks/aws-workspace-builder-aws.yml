@@ -638,6 +638,20 @@
             private_ip: "{{ aws_private_ip_address }}"
     #endregion --- [ Roles: Workspace Builder ] ----------------------------------------------- #
 
+    #region ------ [ Roles: Amazon CloudWatch Agent ] ----------------------------------------- #
+    # The pin is the MSI's own ProductVersion, not the vendor's published build string: this
+    # product publishes '1.300072.0b1766' and registers 1.4.37928, and the role compares against
+    # Add/Remove Programs. Read from the artifact rather than guessed.
+    - role: 'amazon_cloudwatch_agent'
+      when: (state | default('present') | string | lower | trim) != 'absent'
+      vars:
+        amazon_cloudwatch_agent:
+          installer:
+            bucket: "{{ aws_account_id }}-apprepo"
+            version: '1.4.37928.0'
+            sha256: '74925ab35d7803a699c05556b4d9862d32f6a6c28537f4104bdc83cab2671c36'
+    #endregion --- [ Roles: Amazon CloudWatch Agent ] ----------------------------------------- #
+
     #region ------ [ Roles: Amazon SSM Agent ] ------------------------------------------------ #
     # The AMI already carries this agent, so on a current image the role reads, finds the pin
     # satisfied and installs nothing. It is listed because the image must STATE what it carries:
