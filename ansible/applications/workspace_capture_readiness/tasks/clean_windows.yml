@@ -212,10 +212,27 @@
             }
           }
 
-          # Only the intended profiles. Refused rather than deleted: a profile is somebody's data.
+          # Only the intended USER profiles. Refused rather than deleted: a profile is somebody's
+          # data. Service accounts are not people and do not count: a virtual service account gets
+          # a profile under Windows\ServiceProfiles with an S-1-5-80 SID, which is what a
+          # least-privileged service install is SUPPOSED to produce -- the forwarder installed
+          # exactly that way, and counting it would have this role refuse a machine for doing the
+          # right thing. Judged on where the profile lives and whose SID it carries, not on its
+          # name.
+          $UsersRoot = [System.String](Get-ItemProperty `
+            -LiteralPath:'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' `
+            -Name:'ProfilesDirectory' -ErrorAction:'SilentlyContinue').ProfilesDirectory
+          If (-not $UsersRoot) { $UsersRoot = 'C:\Users' }
+          $UsersRoot = [System.Environment]::ExpandEnvironmentVariables($UsersRoot)
+
           ForEach ($Profile In @(Get-CimInstance -ClassName:'Win32_UserProfile' -ErrorAction:'SilentlyContinue' |
                                  Where-Object { -not $PSItem.Special })) {
-            $Leaf = Split-Path -Leaf ([System.String]$Profile.LocalPath)
+            $Path = [System.String]$Profile.LocalPath
+            $Sid = [System.String]$Profile.SID
+            # Service, virtual and app-container SIDs are machine plumbing, not users.
+            If ($Sid -match '^S-1-5-(18|19|20|80|82|83|90|96)') { Continue }
+            If (-not $Path.StartsWith($UsersRoot, [System.StringComparison]::OrdinalIgnoreCase)) { Continue }
+            $Leaf = Split-Path -Leaf $Path
             If ($AllowedProfiles -notcontains $Leaf) {
               $Failures.Add(('user profile {0} is present' -f $Leaf))
             }
