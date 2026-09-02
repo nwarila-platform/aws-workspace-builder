@@ -4,6 +4,19 @@
 #
 # STUB for catalog product 'Adobe-Systems-Inc_Adobe-Connect' (fleet pin 2026.3.125).
 #
+# BLOCKED ON AN ARTIFACT ONLY THE ACCOUNT CAN FETCH. Adobe documents an MSI for enterprise
+# deployment of the Connect desktop application, but does not publish a stable URL for it:
+# the Downloads and Updates page renders its links in the browser, so there is nothing to
+# fetch server-side, and every download.adobe.com path tried for it -- pub/adobe/connect/win
+# and pub/adobe/connect/apps/win, with and without a version in the name -- answers 404,
+# including the directory itself. Unlike aws-cfn-bootstrap, where the documentation named an
+# exact object, here the documentation names a PAGE.
+#
+# So the installer is operator-supplied, like licensed media: download it once from the
+# account's own Connect downloads page, stage it in the application repository under
+# 'Adobe Systems Inc/Adobe Connect/<version>/', and finish this role from the google_chrome
+# pattern. Nothing else about it is unusual.
+#
 # The one honest action of an unfinished role is to refuse loudly: this role is not yet
 # wired into the playbook, and wiring it in early fails here, by name, rather than half
 # installing something. Finish it from the google_chrome pattern (BEGIN reads Add/Remove
@@ -17,5 +30,5 @@
   ansible.builtin.fail:
     msg: >-
       The 'adobe_connect' role is a stub reserving catalog product 'Adobe-Systems-Inc_Adobe-Connect' at fleet pin 2026.3.125.
-      Finish it from the google_chrome pattern and stage its artifact in the application
-      repository before wiring it into the play. See README.md.
+      It is BLOCKED on an operator-supplied artifact: Adobe publishes no stable download
+      URL for the Connect desktop MSI. See the notes at the top of this file.
