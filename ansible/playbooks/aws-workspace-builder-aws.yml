@@ -215,20 +215,6 @@
   #region ------ [ Pre-Tasks ] ---------------------------------------------------------------- #
   pre_tasks:
 
-    # THE CLOCK THIS RUN IS MEASURED AGAINST, read from the DIRECTORY's own clock because the
-    # timestamp it will be compared with is one the directory writes. Taken here, in the play
-    # before the guest joins anything, so that any escrow already on a reused computer object is
-    # necessarily older than it -- which is exactly what makes a stale credential detectable.
-    - name: 'PRE | Take The Freshness Baseline From The Directory Clock'
-      changed_when: false
-      register: '__laps_baseline__'
-
-      ansible.windows.win_powershell:
-        depth: 2
-        error_action: 'stop'
-        script: |
-          $Ansible.Changed = $False
-          $Ansible.Result = @{ utc = (Get-Date).ToUniversalTime().ToString('o') }
 
     # THE DIRECTORY IS A PRECONDITION, NOT SOMETHING A BUILD MAKES. The units and the policy are
     # environment: they change when the environment is deliberately changed, and then not again
@@ -516,10 +502,18 @@
         laps_credential:
           identity: >-
             {{ hostvars[groups['workspace_servers'] | first]['ansible_facts']['netbios_name'] }}
-          # Read from the directory's own clock in play 2, before the guest joined anything, so
-          # an escrow already sitting on a reused computer object is necessarily older than it.
+          # WHEN THIS MACHINE CAME INTO EXISTENCE, which is what makes an older escrow provably
+          # somebody else's. An escrow on a reused computer object was written for the previous
+          # occupant, necessarily before this instance launched.
+          #
+          # It is the INSTANCE's launch time rather than the moment this run started, and the
+          # difference matters: a baseline taken per run would reject the machine's own valid
+          # escrow on every re-run -- the credential was written during the first run, before the
+          # second one began -- and the build would sit out its whole budget waiting for a
+          # rotation that is not coming, because Windows LAPS does not rotate an unexpired
+          # password. Launch time is stable across re-runs, which is the property this needs.
           not_before: >-
-            {{ hostvars[groups['domain_controllers'] | first]['__laps_baseline__'].result.utc }}
+            {{ hostvars[groups['workspace_servers'] | first]['aws_launch_time'] }}
     #endregion --- [ Roles: LAPS Credential ] ------------------------------------------------- #
 
   #endregion --- [ Roles ] -------------------------------------------------------------------- #
