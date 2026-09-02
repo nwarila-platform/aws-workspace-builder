@@ -1,477 +1,61 @@
 # =========================================================================================== #
-# File: 'ansible/playbooks/aws-workspace-builder-aws.yml'
+# File: 'ansible/playbooks/aws-workspace-builder-reenter.yml'
 # --- [ Description ] ----------------------------------------------------------------------- #
 #
-# Builds the AWS WorkSpaces desktop image on an EPHEMERAL EC2 WORKSPACE STAND-IN. The production
-# path drives the WorkSpaces API against directory d-b567216b54 (create-workspaces, wait for
-# AVAILABLE, read ComputerName, resolve the backing instance); none of that API surface exists on
-# a test account's EC2 fleet, so each production step maps onto the nearest thing EC2 can prove:
+# RESUMES A BUILD THAT DIED AFTER THE SEAL. Plays 4 to 6 of the build take the launch key away and
+# put a new way in through the domain, and between those two moments the guest is reachable by
+# nothing this repository holds. A run interrupted there -- a failed task, a dropped VPN, an
+# operator's laptop sleeping through the LAPS wait -- cannot simply be started again: the build
+# opens by connecting over SSH, and there is no SSH to connect over.
 #
-#   describe/create-workspaces      -> terraform apply plus the run-tag-filtered dynamic inventory
-#   wait for State == AVAILABLE     -> host_readiness (the connection itself, then EC2Launch)
-#   the WorkSpaces directory join   -> remote_client onto the private network, then domain_member
-#   the WorkSpace's credential      -> workspace_baseline, then the LAPS escrow read from a DC
-#   the bundle's C: and D: volumes  -> the root volume and the WSUSERVOL standalone volume (D:)
-#   the bundle's software load      -> this repository's application roles, one per product
+# This playbook is plays 5 through 8, and nothing else: read the escrow, re-enter over the
+# listener the domain delivers, converge, record. It is LIFTED from the build playbook rather
+# than rewritten, so the recovery path cannot drift away from the path it recovers.
 #
-# THE CREDENTIAL MAPPING IS THE HARD PART, AND IT IS WHY THIS PLAYBOOK HAS EIGHT PLAYS.
+# WHAT IT NEEDS THAT THE BUILD DID NOT. The build learns the machine's directory name in play 4,
+# from the guest, while SSH still works. A recovery run has no play 4 and no way to ask, so the
+# name is supplied:
 #
-# A WorkSpace joins its directory automatically and takes no user_data: there is no hook to
-# install a key through, and no launch credential to install. The only way in is the password
-# Windows LAPS escrows on the computer object. EC2 hands us the opposite -- a key pair written
-# from IMDS by the framework's user_data -- which is a convenience production does not have, so
-# the run gives it up on purpose:
+#   -e workspace_identity=TCNAW-WSB01
 #
-#   1. contract      the inventory names a guest, a domain controller, an account and the cab
-#   2. prepare       on the domain controller: the OU the stand-in is created in, and the policy
-#                    linked there that opens it to the operator -- the test domain's stand-in for
-#                    the directory team's standing configuration
-#   3. configure     over the launch key: readiness, bootstrap, tunnel, domain join
-#   4. seal          prove the domain's WinRM listener answers, THEN revoke the launch key
-#   5. wait          read the LAPS escrow from a domain controller -- the guest is unreachable
-#   6. re-enter      over WinRM as the LAPS administrator, carry OpenSSH in, key from IMDS
-#   7. converge      back on SSH, exactly as any other fleet host: bootstrap, disks
-#   8. record        the manifest that maps this stand-in onto the WorkSpace it stands in for
+# It is the sAMAccountName without the trailing dollar -- what the directory calls the machine,
+# which after the Server 2022 bootstrap renames it is NOT the inventory hostname.
 #
-# Plays 4 to 6 are the replication. Everything before and after them is an ordinary build.
-#
-# THE DOMAIN DELIVERS THE WAY IN, AND THIS PLAYBOOK PROVES IT RATHER THAN BUILDING IT. A WorkSpace
-# answers on the WinRM listener Group Policy configures ("Allow remote server management through
-# WinRM"), through a policy-delivered firewall rule, to an administrator whose remote token policy
-# lets through with its privileges intact. The stand-in is joined to the same domain, so it gets
-# the same policy the same way; play 4 proves the listener from the controller while SSH still
-# works, and play 6 proves the token before it needs it. A listener this playbook built itself
-# would hide a domain that never delivered one, which is the one thing the stand-in exists to
-# find out. In production that policy is the directory team's standing configuration; the test
-# domain has nobody to stand it, so play 2 writes it there -- on the domain controller, into the
-# directory, never onto the guest -- and the proof in plays 4 and 6 is unchanged.
-#
-# WHERE THIS RUNS. On an operator workstation on the LAN, not on the CI runner: plays 2 and 5 talk
-# to a domain controller at a private address the runner has no route to. The aws-deploy workflow
-# launches the instance and holds it; the converge is local, and the workflow's job summary prints
-# the exact command. See the repository README.
-#
-# The role order inside each play is the design. Each one is a precondition for the next: the host
-# must answer before it can be repaired, be repaired before a module runs, be on the network
-# before it can resolve a realm, be in the realm before LAPS has anywhere to escrow, and have its
-# user volume lettered before anything writes user-facing state to it.
-#
-# gather_facts and become are absent throughout because the framework's ansible.cfg makes
-# gathering explicit and escalation off. Both matter here: implicit gathering would run a module
-# over the shell os_bootstrap has not yet fixed, and the roles escalate per task rather than
-# running the whole play as somebody.
+# WHEN NOT TO USE IT. If the guest still answers on port 22, the build playbook is the right
+# thing to run: it is idempotent, and it re-proves everything this one skips.
 #
 # =========================================================================================== #
 ---
+#region ------ [ Play: The Contract A Recovery Still Has ] ------------------------------------ #
 
-#region ------ [ Play: Inventory Contract ] --------------------------------------------------- #
-# The inventory already filters to this run's instance by its framework-set tags. This guards the
-# states that filter cannot cover: an empty result, where nothing launched or nothing tagged; an
-# invocation that never said which account it is deploying into; and -- new to the credential
-# replication -- a run started without the domain controller inventory the LAPS read needs.
-
-- name: 'PLAY | Validate The Ephemeral AWS Inventory Contract'
+- name: 'PLAY | Validate The Recovery Contract'
   hosts: 'localhost'
   tasks:
-    - name: 'INVENTORY | Require At Least One Filtered Host'
-      ansible.builtin.assert:
-        that: groups['workspace_servers'] | default([]) | length >= 1
-        fail_msg: >-
-          Refusing to configure: the 'workspace_servers' inventory group is empty. The dynamic
-          EC2 inventory found no running instance tagged for this run -- a zero-host inventory is
-          not a successful deployment proof.
-        quiet: true
 
-    # Two inventories, always. The dynamic one finds the guest; the static one names the domain
-    # controller the directory is prepared on and the LAPS credential is read from, and carries
-    # the directory facts every play shares. Play 2 would catch a missing one on its own, but the
-    # worse case is a run that somehow reaches play 5 without it -- past the point where the guest
-    # was deliberately made unreachable -- so the whole contract is checked here.
-    - name: 'INVENTORY | Require The Domain Controller And The Directory Facts It Carries'
+    - name: 'RECOVERY | Require The Name The Directory Knows The Guest By'
       ansible.builtin.assert:
-        that:
-          - groups['domain_controllers'] | default([]) | length >= 1
-          - workspace_computer_ou | default('') | length > 0
-          - workspace_computer_ou is match('^OU=[^,]+(,(OU|DC)=[^,]+)+$')
-          - workspace_capture_ou | default('') | length > 0
-          - workspace_capture_ou is match('^OU=[^,]+(,(OU|DC)=[^,]+)+$')
-          - workspace_capture_ou != workspace_computer_ou
         fail_msg: >-
-          Refusing to configure: the 'domain_controllers' inventory group is empty, or the
-          directory facts it carries are not. This playbook prepares the OU the guest is created
-          in and the policy that opens it (play 2), seals the guest against every credential it
-          holds (play 4), and then reads the Windows LAPS escrow from a domain controller
-          (play 5), so that host -- and workspace_computer_ou, the OU distinguished name the
-          static inventory holds once for the join and the policy alike -- must be in scope
-          before any of it happens. Add the static inventory to the invocation:
+          This playbook resumes a build whose guest is already sealed, so it cannot ask the guest
+          what it is called. Pass the name the DIRECTORY knows it by -- the sAMAccountName
+          without the trailing '$', which after the bootstrap rename is not the inventory
+          hostname: -e workspace_identity=TCNAW-WSB01
+        quiet: true
+        that:
+          - workspace_identity is defined
+          - workspace_identity is match('^[A-Za-z0-9][A-Za-z0-9-]{0,14}$')
+
+    - name: 'RECOVERY | Require The Domain Controller And The Guest'
+      ansible.builtin.assert:
+        fail_msg: >-
+          A recovery reads the escrow from a domain controller and converges the guest, so both
+          inventories must be in scope:
           -i ansible/inventory/aws_ec2.yml -i ansible/inventory/domain_controllers.yml
         quiet: true
-
-    # THE SEAT THIS CONVERGE ARRIVES FROM. The policy play 2 writes admits one source address to
-    # the guest's WinRM listener, and the security group the workflow built admits the same one,
-    # so it is resolved here the way the workflow resolved it: as this controller's public IPv4,
-    # asked of the same service the runner asks. An operator whose egress differs from what the
-    # network sees -- a proxy, a split tunnel -- passes -e operator_address=<ipv4> instead, and
-    # the lookup is skipped. A read that changes nothing runs in check mode too; without that,
-    # a --check run resolves no address and fails its own contract before it reports anything.
-    - name: 'INVENTORY | Resolve The Operator Address The Converge Arrives From'
-      when: operator_address | default('') | length == 0
-      check_mode: false
-      register: '__operator_address_lookup__'
-      ansible.builtin.uri:
-        url: 'https://checkip.amazonaws.com'
-        return_content: true
-        timeout: 15
-
-    - name: 'INVENTORY | Record The Operator Address'
-      ansible.builtin.set_fact:
-        __operator_address__: >-
-          {{ (operator_address | default('') | string | trim)
-             if (operator_address | default('') | length > 0)
-             else (__operator_address_lookup__.content | default('') | string | trim) }}
-
-    - name: 'INVENTORY | Require An IPv4 Operator Address'
-      ansible.builtin.assert:
         that:
-          - >-
-            __operator_address__ is
-            match('^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$')
-        fail_msg: >-
-          The operator address resolved to '{{ __operator_address__ }}', which is not an IPv4
-          address. Play 2 writes it into the policy's firewall rule as the only source admitted
-          to the guest's WinRM listener, and play 6 connects from it; pass the address this
-          converge actually arrives from as -e operator_address=<ipv4>.
-        quiet: true
+          - groups['domain_controllers'] | default([]) | length >= 1
+          - groups['workspace_servers'] | default([]) | length >= 1
 
-    # Account-derived values are passed EXPLICITLY on the invocation, never read from the
-    # environment by a role, so the play and the deploy identity cannot disagree.
-    - name: 'INVENTORY | Require The AWS Deployment Identity'
-      ansible.builtin.assert:
-        that:
-          - aws_account_id is defined
-          - aws_account_id is match('^[0-9]{12}$')
-          - aws_region is defined
-          - aws_region is match('^[a-z]{2}(-[a-z]+)+-[0-9]$')
-        fail_msg: >-
-          aws_account_id and aws_region must be provided as extra-vars. The aws-deploy workflow
-          prints them in its job summary alongside the rest of the local invocation; a local run
-          must pass both explicitly.
-        quiet: true
-
-    # Which of the two ways the guest gets a LAPS policy at all. 'gpo' is production: the domain
-    # delivers it and Windows LAPS processes it on its own cycle, which is what play 5 waits for.
-    # 'local' is for a domain that does not carry the GPO -- play 3 then writes the policy on the
-    # guest itself and forces a processing pass, so there is something to wait for.
-    - name: 'INVENTORY | Require A Recognised LAPS Policy Source'
-      ansible.builtin.assert:
-        that: (laps_policy_source | default('gpo') | string | lower | trim) in ['gpo', 'local']
-        fail_msg: >-
-          laps_policy_source must be 'gpo' (the domain delivers the Windows LAPS policy, which is
-          what production does) or 'local' (this playbook writes it on the guest, for a domain
-          that has no LAPS GPO). A domain without the GPO run under 'gpo' escrows nothing and
-          burns the entire two-hour wait in play 5 before failing.
-        quiet: true
-
-    # The OpenSSH payload play 6 carries in, checked where it lives -- on this controller -- and
-    # checked NOW. Play 6 runs after the seal and after the LAPS wait, over the one transport the
-    # host has left; a cab found missing there costs the whole detour. The role validates the
-    # same path again at its own door, so this is the early copy of that check, not the only one.
-    - name: 'INVENTORY | Require The OpenSSH Payload Play 6 Carries To The Guest'
-      when: (state | default('present') | string | lower | trim) != 'absent'
-      ansible.builtin.assert:
-        that:
-          - openssh_payload is defined
-          - openssh_payload | string | length > 0
-          - openssh_payload | string is abs
-          - openssh_payload | string is file
-        fail_msg: >-
-          openssh_payload must be the ABSOLUTE path, on this controller, of the OpenSSH server
-          Features on Demand cab for the guest's build
-          (OpenSSH-Server-Package~31bf3856ad364e35~amd64~~.cab for Windows Server 2022) -- the
-          same object the framework's windows_fod_source bucket holds for user_data. Play 6
-          carries it to the sealed guest over WinRM and installs it with Windows Update forbidden
-          as a source, because a domain-joined host behind update policy is refused the payload
-          from Windows Update. Pass it as -e openssh_payload=<path>.
-        quiet: true
-
-#endregion --- [ Play: Inventory Contract ] --------------------------------------------------- #
-
-#region ------ [ Play: Prepare The Directory ] ------------------------------------------------ #
-# ON A DOMAIN CONTROLLER, before the guest exists in the directory at all. A WorkSpace is born
-# into an OU its directory already carries, under a policy its directory team already stands:
-# the WinRM listener, the firewall opening for the operator, the remote token, the logon rights.
-# The test domain has no directory team, so this play stands that configuration for it -- into
-# the directory, where production keeps it, and never onto the guest, whose whole job is to prove
-# that the domain delivers it.
-#
-# Idempotent: every setting is compared before it is written, so a run against a prepared
-# directory changes nothing. The one per-run value is the operator address the firewall rule
-# admits, resolved in play 1 from the seat the converge is running in.
-
-- name: 'PLAY | Require The Directory The Stand-In Is Born Into'
-  hosts: 'domain_controllers'
-  any_errors_fatal: true
-
-  #region ------ [ Pre-Tasks ] ---------------------------------------------------------------- #
-  pre_tasks:
-
-
-    # THE DIRECTORY IS A PRECONDITION, NOT SOMETHING A BUILD MAKES. The units and the policy are
-    # environment: they change when the environment is deliberately changed, and then not again
-    # for months of image builds. Creating them from here would mean every build held the rights
-    # to make organizational units and rewrite Group Policy in a production directory, and would
-    # re-assert a security template on a schedule nobody asked for. So the build reads, and stops
-    # if what it needs is not there. aws-workspace-builder-ad-config-local.yml is what puts it
-    # there, run once by an operator.
-    - name: 'DIRECTORY | Read The Environment This Build Requires'
-      register: '__directory_state__'
-
-      ansible.windows.win_powershell:
-        depth: 3
-        error_action: 'stop'
-        parameters:
-          CaptureOu: "{{ workspace_capture_ou }}"
-          Name: "{{ workspace_policy_name | default('WorkSpaces Remote Management') }}"
-          TargetOu: "{{ workspace_computer_ou }}"
-        script: |
-          [CmdletBinding()]
-          Param ([System.String]$Name, [System.String]$TargetOu, [System.String]$CaptureOu)
-          Function Test-Ou {
-            Param ([System.String]$Path)
-            Try { $Null = Get-ADOrganizationalUnit -Identity:$Path; Return $True } Catch { Return $False }
-          }
-          $Policy = @(Get-GPO -All | Where-Object { $PSItem.DisplayName -eq $Name })
-          $Linked = $False
-          If ($Policy.Count -eq 1) {
-            $Inheritance = Get-GPInheritance -Target:$TargetOu -ErrorAction:'SilentlyContinue'
-            If ($Null -ne $Inheritance) {
-              $Linked = @(
-                $Inheritance.GpoLinks | Where-Object { [System.String]$PSItem.GpoId -eq [System.String]$Policy[0].Id }
-              ).Count -gt 0
-            }
-          }
-          $Ansible.Changed = $False
-          $Ansible.Result = @{
-            build_ou   = (Test-Ou -Path:$TargetOu)
-            capture_ou = (Test-Ou -Path:$CaptureOu)
-            policy      = ($Policy.Count -eq 1)
-            linked      = $Linked
-          }
-
-    - name: 'DIRECTORY | Require The Environment Before Anything Is Built'
-      ansible.builtin.assert:
-        fail_msg: >-
-          The directory this build needs is not in place -- build OU
-          {{ __directory_state__.result.build_ou }}, capture OU
-          {{ __directory_state__.result.capture_ou }}, policy
-          {{ __directory_state__.result.policy }}, policy linked to the build OU
-          {{ __directory_state__.result.linked }} (all four must be true). This build does not
-          create them, deliberately: run aws-workspace-builder-ad-config-local.yml once against
-          the domain controller, then re-run this.
-        quiet: true
-        that:
-          - __directory_state__.result.build_ou | bool
-          - __directory_state__.result.capture_ou | bool
-          - __directory_state__.result.policy | bool
-          - __directory_state__.result.linked | bool
-
-  #endregion --- [ Pre-Tasks ] ---------------------------------------------------------------- #
-
-
-#endregion --- [ Play: Prepare The Directory ] ------------------------------------------------ #
-
-#region ------ [ Play: Configure The Guest ] -------------------------------------------------- #
-# Over the launch key, while there still is one. Everything this play does is a precondition for
-# the sealing that follows: a host that is not on the network cannot reach a realm, and a host
-# that is not in a realm has no computer object for LAPS to escrow a password on.
-
-- name: 'PLAY | Configure The Guest (ephemeral AWS workspace stand-in)'
-  hosts: 'workspace_servers'
-  any_errors_fatal: true
-
-  #region ------ [ Roles ] -------------------------------------------------------------------- #
-  roles:
-
-    #region ------ [ Roles: Host Readiness ] -------------------------------------------------- #
-    # Waits for the connection itself, never a port: a TCP connect cannot speak for a connection
-    # reaching its target through a proxy or a tunnel, and this inventory can select those. It
-    # then waits out EC2Launch, detecting the platform itself rather than being told. This is the
-    # stand-in for the production wait on Workspaces[0].State == AVAILABLE.
-    - role: 'host_readiness'
-    #endregion --- [ Roles: Host Readiness ] -------------------------------------------------- #
-
-    #region ------ [ Roles: OS Bootstrap ] ---------------------------------------------------- #
-    # Flips OpenSSH's DefaultShell to PowerShell and proves the session is elevated. Every module
-    # after it depends on that. Pass it NO vars: role params outrank the connection scoping it
-    # relies on, and a stray one silently re-breaks the pre-flip stage.
-    - role: 'os_bootstrap'
-    #endregion --- [ Roles: OS Bootstrap ] ---------------------------------------------------- #
-
-    #region ------ [ Roles: Remote Client ] --------------------------------------------------- #
-    # Site policy: the role defaults every value remote_client needs, so this play states none.
-    # 'aws_account_id' is an extra-var -- only the pipeline knows which account it deploys into.
-    # Skipped when the image is being torn down: an uninstall is not a reason to rebuild a
-    # tunnel the host is about to stop needing.
-    - role: 'remote_client'
-      when: (state | default('present') | string | lower | trim) != 'absent'
-    #endregion --- [ Roles: Remote Client ] --------------------------------------------------- #
-
-    #region ------ [ Roles: Domain Member ] --------------------------------------------------- #
-    # The stand-in for the WorkSpaces directory registration: a production WorkSpace is born
-    # joined to its directory, so the image proof joins the site realm the same way every other
-    # fleet host does. The role defaults the realm, the account and the secret's object; the two
-    # things it cannot default are said here. The bucket the join secret is read from is the
-    # deployment account's, so it is derived from the extra-var play 1 required. The OU is the
-    # WorkSpaces directory's target-OU setting, stood in for by the ONE inventory value play 2
-    # linked the policy to -- a computer object created anywhere else would be born under no
-    # policy at all, and play 4 would find a listener the domain never delivered.
-    #
-    # It is also what gives Windows LAPS somewhere to put a password. Play 5 waits on the computer
-    # object this join creates.
-    - role: 'domain_member'
-      when: (state | default('present') | string | lower | trim) != 'absent'
-      vars:
-        domain_member:
-          computer_ou: "{{ workspace_computer_ou }}"
-          password:
-            bucket: "{{ aws_account_id }}-ansible"
-    #endregion --- [ Roles: Domain Member ] --------------------------------------------------- #
-
-    #region ------ [ Roles: LAPS Admin ] ------------------------------------------------------ #
-    # ONLY WHEN THE DOMAIN DOES NOT DELIVER THE POLICY. In production the LAPS policy arrives by
-    # Group Policy and this role has nothing to do -- which is why 'gpo' is the default and this
-    # is skipped. Against a domain that has no LAPS GPO, it writes the policy on the guest and
-    # forces a processing pass, so that play 5 has an escrow to wait for instead of waiting for a
-    # policy that is never coming.
-    #
-    # Either way the credential is generated ON THE GUEST and escrowed to the computer object; no
-    # password crosses Ansible here, and play 5 reads it back from the directory.
-    - role: 'laps_admin'
-      when:
-        - (state | default('present') | string | lower | trim) != 'absent'
-        - (laps_policy_source | default('gpo') | string | lower | trim) == 'local'
-    #endregion --- [ Roles: LAPS Admin ] ------------------------------------------------------ #
-
-  #endregion --- [ Roles ] -------------------------------------------------------------------- #
-
-#endregion --- [ Play: Configure The Guest ] -------------------------------------------------- #
-
-#region ------ [ Play: Seal The Stand-In ] ---------------------------------------------------- #
-# THE POINT OF NO RETURN, AND IT IS INTENTIONAL. This play takes the launch key away, because a
-# real WorkSpace never had one. After it, the only way to this host is the WinRM listener the
-# domain delivered and the password the directory escrows.
-#
-# It is a play of its own rather than two more roles on the one above for one reason: the pre_task
-# below must run AFTER the domain join and BEFORE the sealing, and `roles:` always runs before
-# `post_tasks:`. Splitting the play is what puts the identity read in the one window where it is
-# both possible and still useful.
-
-- name: 'PLAY | Seal The Stand-In Against Every Credential This Build Holds'
-  hosts: 'workspace_servers'
-  any_errors_fatal: true
-
-  #region ------ [ Pre-Tasks: Write Down The Name The Directory Knows ] ----------------------- #
-  pre_tasks:
-
-    # THE NAME IS NOT THE INVENTORY HOSTNAME. An EC2 Windows instance is not renamed at launch, so
-    # the computer object the join created carries the AMI-generated name (EC2AMAZ-...), while the
-    # inventory calls this host by its Name tag. Play 5 reads the LAPS escrow BY THAT NAME, and
-    # play 5 cannot ask the guest, because by then the guest answers nobody. So it is read here,
-    # in the last play that can still ask, and carried forward in hostvars.
-    #
-    # 'platform' also carries the domain membership facts asserted below, so the two questions --
-    # what is this machine called, and did it actually join -- are one round trip.
-    - name: 'IDENTITY | Read The Name The Directory Knows This Host By'
-      ansible.builtin.setup:
-        gather_subset: [ '!all', '!min', 'platform', 'windows_domain' ]
-
-    - name: 'IDENTITY | Require A Joined Host With A Machine Name To Wait On'
-      ansible.builtin.assert:
-        fail_msg: >-
-          Refusing to seal this host: it reports netbios_name
-          '{{ ansible_facts.netbios_name | default("") }}' and domain membership
-          '{{ ansible_facts.windows_domain_member | default("unknown") }}'. Sealing an unjoined
-          host produces an instance with no way in at all -- there is no computer object for
-          Windows LAPS to escrow a password on, so play 5 would wait out its entire budget on a
-          machine the directory has never heard of.
-        quiet: true
-        that:
-          - ansible_facts.windows_domain_member | default(false) | bool
-          - ansible_facts.netbios_name | default('') is match('^[A-Za-z0-9][A-Za-z0-9-]{0,14}$')
-
-  #endregion --- [ Pre-Tasks: Write Down The Name The Directory Knows ] ----------------------- #
-
-  #region ------ [ Pre-Tasks: Refuse To Seal What Nothing Can Reach ] ------------------------- #
-
-    # THE POINT OF NO RETURN HAS A GATE ON IT. Everything below this play revokes the only
-    # credential that currently works, and the only thing that replaces it is an escrow LAPS
-    # writes on its own schedule. This play already proves the WinRM listener answers -- but a
-    # listener is not a credential, and under the default policy source nothing in this entire run
-    # touches LAPS on the guest. Without this gate the first time the run learns whether a LAPS
-    # policy exists at all is the play AFTER the key is gone: two hours of silent polling, then a
-    # guest reachable by nothing.
-    #
-    # The guest's own effective policy is what is read, not the directory's intent, because a GPO
-    # that exists but has not reached this machine yet buys nothing. BackupDirectory 2 is
-    # "escrow to Active Directory"; 1 is Entra, which this path cannot read.
-    - name: 'SEAL | Read The LAPS Policy The Guest Has Actually Received'
-      changed_when: false
-      register: '__seal_laps_policy__'
-
-      ansible.windows.win_powershell:
-        depth: 2
-        error_action: 'stop'
-        script: |
-          $Key = 'HKLM:\Software\Microsoft\Policies\LAPS'
-          $Backup = 0
-          If (Test-Path -LiteralPath:$Key) {
-            $Item = Get-ItemProperty -LiteralPath:$Key -ErrorAction:'SilentlyContinue'
-            If ($Null -ne $Item) {
-              $Property = $Item.PSObject.Properties['BackupDirectory']
-              If ($Null -ne $Property) { $Backup = [System.Int32]$Property.Value }
-            }
-          }
-          $Ansible.Changed = $False
-          $Ansible.Result = @{ backup_directory = $Backup; escrows_to_ad = ($Backup -eq 2) }
-
-    - name: 'SEAL | Refuse To Seal A Guest No Credential Will Ever Reach'
-      ansible.builtin.assert:
-        fail_msg: >-
-          Refusing to seal: this guest has no effective Windows LAPS policy escrowing to Active
-          Directory (BackupDirectory is
-          {{ __seal_laps_policy__.result.backup_directory | default('unset') }}, and 2 is
-          required). The seal revokes the launch key and closes port 22, and the ONLY way back in
-          is the credential LAPS escrows -- so sealing now would strand this guest. Link the LAPS
-          policy to {{ workspace_computer_ou }} and re-run, or pass
-          -e laps_policy_source=local to have this build write the policy itself.
-        quiet: true
-        that: [ __seal_laps_policy__.result.escrows_to_ad | default(false) | bool ]
-
-  #endregion --- [ Pre-Tasks: Refuse To Seal What Nothing Can Reach ] ------------------------- #
-
-  #region ------ [ Roles ] -------------------------------------------------------------------- #
-  roles:
-
-    #region ------ [ Roles: Workspace Baseline ] ---------------------------------------------- #
-    # Proves the WinRM listener the domain delivered -- the service, the port on the guest, then
-    # the port from the controller -- and only THEN removes the authorized key, closes port 22 and
-    # schedules the OpenSSH uninstall. The order is the safety: every revocation happens after the
-    # replacement transport has answered, so a failure leaves a host this play can still reach
-    # rather than a stranded instance. It builds no listener: one it built would hide a domain
-    # that never delivered one.
-    #
-    # The role defaults every value it holds -- they are Windows and OpenSSH contracts, not site
-    # choices -- so this play states none.
-    #
-    # Skipped on teardown: an instance about to be destroyed does not need to be made harder to
-    # reach on the way out.
-    - role: 'workspace_baseline'
-      when: (state | default('present') | string | lower | trim) != 'absent'
-    #endregion --- [ Roles: Workspace Baseline ] ---------------------------------------------- #
-
-  #endregion --- [ Roles ] -------------------------------------------------------------------- #
-
-#endregion --- [ Play: Seal The Stand-In ] ---------------------------------------------------- #
+#endregion --- [ Play: The Contract A Recovery Still Has ] ------------------------------------ #
 
 #region ------ [ Play: Read The Escrowed Credential ] ----------------------------------------- #
 # ON A DOMAIN CONTROLLER, because that is where the credential is. The guest is not contacted by
@@ -500,8 +84,7 @@
       when: (state | default('present') | string | lower | trim) != 'absent'
       vars:
         laps_credential:
-          identity: >-
-            {{ hostvars[groups['workspace_servers'] | first]['ansible_facts']['netbios_name'] }}
+          identity: "{{ workspace_identity }}"
           # WHEN THIS MACHINE CAME INTO EXISTENCE, which is what makes an older escrow provably
           # somebody else's. An escrow on a reused computer object was written for the previous
           # occupant, necessarily before this instance launched.
@@ -749,7 +332,7 @@
             user_name: 'Administrator'
           identity:
             workspace_id: "{{ aws_instance_id }}"
-            computer_name: "{{ ansible_facts.netbios_name }}"
+            computer_name: "{{ ansible_facts.netbios_name | default(workspace_identity) }}"
             image_id: "{{ aws_image_id }}"
             private_ip: "{{ aws_private_ip_address }}"
     #endregion --- [ Roles: Workspace Builder ] ----------------------------------------------- #

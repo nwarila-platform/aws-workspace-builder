@@ -423,6 +423,22 @@
           {{ mozilla_firefox_esr_running.policy.overlays | join(', ') }}. Combine them into one
           overlay file under files/policy/ and name that.
 
+    # THE VENDOR READS FROM A DIRECTORY IT DOES NOT CREATE. Firefox looks for policies.json under
+    # 'distribution' in its install tree, but the installer ships no such folder -- so on a fresh
+    # install the documented policy mechanism has nowhere to put its file until something makes
+    # the directory. That something is here.
+
+    - name: 'END | Ensure The Directory The Vendor Reads Policy From'
+      when: (mozilla_firefox_esr_running.policy.overlays | default([]) | length) == 1
+
+      ansible.windows.win_file:
+        access_time: 'preserve'
+        access_time_format: 'yyyy-MM-dd HH:mm:ss'
+        modification_time: 'preserve'
+        modification_time_format: 'yyyy-MM-dd HH:mm:ss'
+        path: "{{ mozilla_firefox_esr_running.policy.file_path | win_dirname }}"
+        state: 'directory'
+
     - name: 'END | Install The Enterprise Policy Overlay'
       when: (mozilla_firefox_esr_running.policy.overlays | default([]) | length) == 1
 
