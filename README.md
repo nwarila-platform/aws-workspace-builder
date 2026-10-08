@@ -62,7 +62,7 @@ rule can create. So the converge runs from an operator workstation on that netwo
    **one silent task** — the polling read is `no_log`, and `until` prints nothing under `no_log`,
    because a LAPS password may not appear in a log, a retry line or a callback. It is not hung.
 
-`hold_minutes: 0` — what the push and schedule triggers use — proves the launch lifecycle only:
+`hold_minutes: 0` — what the push trigger uses — proves the launch lifecycle only:
 apply, tag, destroy, no guest configuration.
 
 ## Prerequisites for a local run
