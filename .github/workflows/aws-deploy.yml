@@ -31,10 +31,9 @@
 #   * One fixed state key; this workflow's concurrency group prevents overlapping applies and
 #     never cancels a live lifecycle. A later lifecycle can clean predecessor state before apply;
 #     no age-gated reaper exists for a run killed before destroy.
-#   * Protected-main pushes and the weekly schedule run with hold_minutes 0: they prove the
-#     LAUNCH LIFECYCLE — apply, tag, destroy — and nothing about the guest, because no operator is
-#     waiting to converge one. One durable incident is updated on failure and closed after the
-#     next successful lifecycle.
+#   * Protected-main pushes run with hold_minutes 0: they prove the LAUNCH LIFECYCLE — apply,
+#     tag, destroy — and nothing about the guest, because no operator is waiting to converge one.
+#     One durable incident is updated on failure and closed after the next successful lifecycle.
 # =========================================================================================== #
 name: AWS Deploy
 
@@ -48,9 +47,6 @@ name: AWS Deploy
         default: '240'
   push:
     branches: [ main ]
-  schedule:
-    # Avoid the top-of-hour load spike documented for scheduled Actions workflows.
-    - cron: '17 9 * * 1'
 permissions: {}
 
 # One boundary, one state key — never two runs at once, never cancel a live apply.
@@ -118,7 +114,7 @@ jobs:
       # four hours. Refuse at the top of the job, before anything is created.
       #
       # hold_minutes 0 is exempt: that is the launch lifecycle proof, which converges nothing and
-      # is what the push and schedule triggers run.
+      # is what the push trigger runs.
       - name: Require an operator address for a held run
         if: github.event_name == 'workflow_dispatch' && inputs.hold_minutes != '0'
         env:
